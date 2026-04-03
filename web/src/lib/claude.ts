@@ -12,11 +12,12 @@ Kullanıcının mesajını analiz et ve aşağıdaki JSON formatında yanıt ver
   "time": "<HH:MM veya null>",
   "text": "<görev metni veya null>",
   "new_time": "<yeni saat HH:MM veya null>",
-  "day": "<gün adı veya null>"
+  "day": "<gün adı veya null>",
+  "date": "<YYYY-MM-DD veya null>"
 }
 
 Geçerli intent'ler:
-- add_task: Yeni görev ekleme ("saat 14:00'de toplantı var", "10:30'da spor yap")
+- add_task: Yeni görev ekleme ("saat 14:00'de toplantı var", "10:30'da spor yap", "yarın 15:00'de toplantı", "3 gün sonra randevu")
 - mark_done: Görevi tamamlandı olarak işaretle ("toplantıyı hallettim", "sporu yaptım")
 - mark_not_done: Görevi yapamadım, ertele ("sporu yapamadım", "toplantıya giremedim")
 - delete_task: Görevi sil ("toplantıyı iptal et", "sporu sil")
@@ -25,7 +26,15 @@ Geçerli intent'ler:
 - reschedule: Görevi yeni saate taşı ("toplantıyı 15:00'e al", "sporu 18:00'e taşı")
 - edit_task: Görev metnini düzenle ("toplantıyı 'proje toplantısı' olarak güncelle")
 - weekly_rule_add: Haftalık tekrar eden kural ekle ("her pazartesi spor")
+- routine_add: Günlük rutin/alışkanlık ekle ("her gün sabah 7'de günlük planı gönder", "her sabah bana özet yaz", "hergün yapılacaklar listeme ekle")
 - ignore: Görevle ilgisi yok, sohbet ("nasılsın", "teşekkürler")
+
+Tarih kuralları (date alanı için):
+- Bugün → null
+- Yarın → bugünün tarihi + 1 gün (YYYY-MM-DD)
+- "X gün sonra" → bugün + X gün
+- "Cuma", "Pazartesi" gibi gün adları → o güne karşılık gelen tarih (geçmişe gitme, ileri bak)
+- Geçmiş tarih veya bugün → null
 
 Önemli kurallar:
 - Sadece JSON döndür, başka metin ekleme
@@ -99,8 +108,8 @@ export async function classifyMessage(
     try {
       const response = await client.messages.create({
         model: 'claude-opus-4-5',
-        max_tokens: 128,
-        system: CLASSIFIER_SYSTEM + tasksContext,
+        max_tokens: 256,
+        system: CLASSIFIER_SYSTEM + `\n\nBugünün tarihi: ${date}` + tasksContext,
         messages: [{ role: 'user', content: message }],
       })
 

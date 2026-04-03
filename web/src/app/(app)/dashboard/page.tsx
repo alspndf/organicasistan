@@ -93,6 +93,19 @@ export default async function DashboardPage() {
 
   const weeklyBadges = await getWeeklyBadges(userId)
 
+  // Future tasks grouped by date
+  const futureTasks = await prisma.task.findMany({
+    where: { userId, date: { gt: todayStr }, status: 'pending' },
+    orderBy: [{ date: 'asc' }, { time: 'asc' }],
+    take: 20,
+  })
+
+  const futureByDate: Record<string, typeof futureTasks> = {}
+  for (const t of futureTasks) {
+    if (!futureByDate[t.date]) futureByDate[t.date] = []
+    futureByDate[t.date].push(t)
+  }
+
   const serializedTasks = tasks.map(t => ({
     id: t.id,
     userId: t.userId,
@@ -149,6 +162,39 @@ export default async function DashboardPage() {
       <div className="mt-6">
         <QuickAddTask todayDate={todayStr} />
       </div>
+
+      {/* Future tasks */}
+      {Object.keys(futureByDate).length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-white font-semibold text-lg mb-4">İleri Tarihler</h2>
+          <div className="space-y-4">
+            {Object.entries(futureByDate).map(([date, dateTasks]) => {
+              const d = new Date(date + 'T00:00:00')
+              const label = `${d.getDate()} ${TR_MONTHS[d.getMonth()]} ${d.getFullYear()} — ${TR_DAYS[d.getDay()]}`
+              return (
+                <div
+                  key={date}
+                  className="rounded-2xl p-5"
+                  style={{
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.07)',
+                  }}
+                >
+                  <p className="text-zinc-400 text-sm font-medium mb-3">{label}</p>
+                  <div className="space-y-2">
+                    {dateTasks.map(t => (
+                      <div key={t.id} className="flex items-center gap-3">
+                        <span className="text-zinc-600 text-xs w-12 shrink-0">{t.time}</span>
+                        <span className="text-zinc-300 text-sm">{t.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -28,6 +28,15 @@ export interface ClassifyResult {
   text: string | null
   new_time: string | null
   day: string | null
+  date: string | null  // YYYY-MM-DD for future tasks, null = today
+}
+
+export interface DailyRoutine {
+  id: string
+  userId: string
+  text: string
+  time: string | null
+  createdAt: string
 }
 
 export interface EmailActionItem {

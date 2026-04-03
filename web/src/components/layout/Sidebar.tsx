@@ -11,6 +11,7 @@ import {
   Mail,
   Settings,
   LogOut,
+  Repeat2,
 } from 'lucide-react'
 
 interface SidebarProps {
@@ -23,6 +24,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/tasks', icon: CheckSquare, label: 'Görevler' },
+  { href: '/routines', icon: Repeat2, label: 'Günlük Rutinler' },
   { href: '/schedule', icon: Calendar, label: 'Haftalık Plan' },
   { href: '/chat', icon: MessageSquare, label: 'Sohbet' },
   { href: '/email', icon: Mail, label: 'E-posta' },

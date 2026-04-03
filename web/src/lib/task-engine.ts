@@ -8,7 +8,8 @@ export async function executeIntent(
   userId: string,
   date: string
 ): Promise<string> {
-  const { intent, time, text, new_time } = decision
+  const { intent, time, text, new_time, date: taskDate } = decision
+  const effectiveDate = taskDate || date
 
   switch (intent) {
     case 'add_task': {
@@ -21,14 +22,15 @@ export async function executeIntent(
           userId,
           title: text.trim(),
           time: parsedTime,
-          date,
+          date: effectiveDate,
           status: 'pending',
           priority: 'medium',
           source: 'web',
         },
       })
 
-      return `✅ "${task.title}" görevi ${task.time} için eklendi.`
+      const dateLabel = effectiveDate === date ? '' : ` (${effectiveDate})`
+      return `✅ "${task.title}" görevi ${task.time}${dateLabel} için eklendi.`
     }
 
     case 'mark_done': {
@@ -194,6 +196,22 @@ export async function executeIntent(
       })
 
       return `📅 Haftalık kural kaydedildi: "${text}" (${decision.day || 'her gün'})`
+    }
+
+    case 'routine_add': {
+      if (!text) return 'Rutin metni anlaşılamadı.'
+
+      const parsedTime = parseTime(time)
+
+      await prisma.dailyRoutine.create({
+        data: {
+          userId,
+          text: text.trim(),
+          time: parsedTime,
+        },
+      })
+
+      return `🔁 Günlük rutin kaydedildi: "${text.trim()}"${parsedTime ? ` (${parsedTime})` : ''}`
     }
 
     case 'ignore': {

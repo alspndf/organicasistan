@@ -85,6 +85,9 @@ export default function Sidebar({ user }: SidebarProps) {
         })}
       </nav>
 
+      {/* Version */}
+      <p className="text-center text-zinc-700 text-xs pb-2">v1.0.0</p>
+
       {/* User */}
       <div className="px-3 pb-4 mt-auto">
         <div

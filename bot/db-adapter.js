@@ -78,4 +78,29 @@ async function getRoutines() {
   }
 }
 
-module.exports = { syncTask, updateTaskStatus, deleteTask, getTodayTasks, saveRoutine, getRoutines };
+/** Load saved conversation history. Returns a Promise. */
+async function getConversationHistory() {
+  try {
+    const res = await fetch(`${WEB_URL}/api/bot/history`, { headers: HEADERS });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (e) {
+    console.warn('[DB-Adapter] getConversationHistory error:', e.message);
+    return [];
+  }
+}
+
+/** Persist conversation history (fire-and-forget). */
+function saveConversationHistory(messages) {
+  fetch(`${WEB_URL}/api/bot/history`, {
+    method: 'PUT',
+    headers: HEADERS,
+    body: JSON.stringify(messages),
+  }).catch(e => console.warn('[DB-Adapter] saveConversationHistory error:', e.message));
+}
+
+module.exports = {
+  syncTask, updateTaskStatus, deleteTask, getTodayTasks,
+  saveRoutine, getRoutines,
+  getConversationHistory, saveConversationHistory,
+};

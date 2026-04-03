@@ -182,7 +182,17 @@ function fireTask(task) {
 
 // ─── Agent: conversation history ─────────────────────────────────────────────
 const conversationHistory = [];
-const MAX_HISTORY = 10;
+const MAX_HISTORY = 20;  // keep more history since it's persisted
+
+// Debounced history save — only writes to DB 3s after last change
+let _historySaveTimer = null;
+function scheduleSaveHistory() {
+  if (!dbAdapter) return;
+  clearTimeout(_historySaveTimer);
+  _historySaveTimer = setTimeout(() => {
+    dbAdapter.saveConversationHistory(conversationHistory);
+  }, 3000);
+}
 
 function buildAgentSystem() {
   const current  = nowHH();
@@ -835,6 +845,7 @@ async function runAgent(userText) {
         send(finalText);
         conversationHistory.push({ role: 'assistant', content: response.content });
         while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
+        scheduleSaveHistory();
       }
       return;
     }
@@ -1085,6 +1096,17 @@ console.log('[SYS] Sistem başlatılıyor...');
       }
     } catch (e) {
       console.warn('[SYS] Görevler yüklenemedi:', e.message);
+    }
+
+    // Load conversation history
+    try {
+      const savedHistory = await dbAdapter.getConversationHistory();
+      if (savedHistory && savedHistory.length) {
+        conversationHistory.push(...savedHistory);
+        console.log(`[SYS] ${conversationHistory.length} mesaj geçmişi yüklendi.`);
+      }
+    } catch (e) {
+      console.warn('[SYS] Konuşma geçmişi yüklenemedi:', e.message);
     }
 
     // Load routines and register their cron jobs

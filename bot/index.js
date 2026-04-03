@@ -91,8 +91,9 @@ function saveRule(rule) {
 function saveSchedule(schedule) {
   const mem = loadMemory();
   if (!mem.schedules) mem.schedules = [];
-  // Replace existing schedule with same action to avoid duplicates
-  mem.schedules = mem.schedules.filter(s => s.action !== schedule.action);
+  // Replace existing schedule with same action+time to avoid duplicates
+  const key = s => `${s.action}@${s.time}`;
+  mem.schedules = mem.schedules.filter(s => key(s) !== key(schedule));
   mem.schedules.push(schedule);
   saveMemory(mem);
 }
@@ -225,12 +226,13 @@ ${taskList}`;
 const AGENT_TOOLS = [
   {
     name: 'add_task',
-    description: 'Yeni görev ekle. Zaman çakışması veya limit aşımı varsa bildir.',
+    description: 'Yeni görev ekle. Gelecek bir tarih için date parametresi kullan (yarın, cumartesi, 3 gün sonra gibi). Bugün için date boş bırak.',
     input_schema: {
       type: 'object',
       properties: {
         time:  { type: 'string', description: 'HH:MM formatında saat' },
         title: { type: 'string', description: 'Görev başlığı' },
+        date:  { type: 'string', description: 'YYYY-MM-DD formatında tarih — sadece gelecek tarihler için. Bugün için boş bırak.' },
       },
       required: ['time', 'title'],
     },
@@ -437,6 +439,9 @@ function registerSchedule(s) {
   cron.schedule(cronExpr, () => {
     console.log(`[CRON] Zamanlama tetiklendi: ${s.description}`);
     if (s.action === 'daily_analysis') runDailyAnalysis();
+    else if (s.action === 'routine' && s.text) {
+      runAgent(s.text).catch(e => console.error('[CRON] Rutin hatası:', e.message));
+    }
   }, { timezone: 'Europe/Istanbul' });
 
   console.log(`[CRON] Zamanlama kaydedildi: ${s.description} (${cronExpr})`);
@@ -607,6 +612,17 @@ async function executeTool(name, input) {
     case 'add_task': {
       const t = parseTime(input.time);
       if (!t) return `❌ Geçersiz saat: ${input.time}`;
+
+      // Future date: save to DB only, not in-memory
+      if (input.date) {
+        const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+        if (input.date > today) {
+          const futureTask = { id: `t${idCounter++}`, title: input.title, time: t, status: 'pending' };
+          dbAdapter?.syncTask(futureTask, input.date);
+          return `✅ ${input.date} tarihine eklendi: ${t} — ${input.title}`;
+        }
+      }
+
       if (tasks.filter(x => x.status === 'pending').length >= MAX_TASKS)
         return `❌ Maksimum ${MAX_TASKS} görev limitine ulaşıldı.`;
       if (slotTaken(t)) return `❌ ${t} saatinde zaten görev var.`;
@@ -713,8 +729,16 @@ async function executeTool(name, input) {
     case 'save_routine': {
       const routineText = input.text;
       const routineTime = input.time || null;
+      // Save to web app DB
       dbAdapter?.saveRoutine(routineText, routineTime);
-      return `🔁 Günlük rutin kaydedildi: "${routineText}"${routineTime ? ` (${routineTime})` : ''} — Web uygulamasında Günlük Rutinler bölümünde görünür.`;
+      // If time given, also persist as a cron schedule so it survives restarts
+      if (routineTime) {
+        const s = { time: routineTime, action: 'routine', text: routineText, description: routineText };
+        saveSchedule(s);
+        registerSchedule(s);
+        return `🔁 Rutin kaydedildi ve zamanlama oluşturuldu: "${routineText}" — Her gün ${routineTime}'da otomatik çalışacak.`;
+      }
+      return `🔁 Günlük rutin kaydedildi: "${routineText}" — Web uygulamasında Günlük Rutinler bölümünde görünür.`;
     }
 
     case 'set_schedule': {

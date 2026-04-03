@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tasks           Task[]
+  weeklySchedule  WeeklySchedule[]
+  memory          Memory[]
+  reminders       Reminder[]
+  emailConnection EmailConnection?
+  settings        UserSettings?
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  time      String
+  date      String
+  status    String   @default("pending")
+  priority  String   @default("medium")
+  source    String   @default("web")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+
+  @@index([userId, date])
+  @@index([userId, status])
+}
+
+model WeeklySchedule {
+  id         String   @id @default(cuid())
+  userId     String
+  dayKey     String
+  activities String
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dayKey])
+}
+
+model Memory {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, key])
+}
+
+model Reminder {
+  id       String  @id @default(cuid())
+  userId   String
+  taskId   String?
+  message  String
+  remindAt String
+  date     String
+  sent     Boolean @default(false)
+  channel  String  @default("web")
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, date, sent])
+}
+
+model EmailConnection {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  provider     String
+  accessToken  String?
+  refreshToken String?
+  tokenExpiry  DateTime?
+  imapHost     String?
+  imapPort     Int?
+  imapUser     String?
+  imapPassEnc  String?
+  checkTime    String    @default("08:30")
+  lastChecked  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserSettings {
+  id              String  @id @default(cuid())
+  userId          String  @unique
+  anthropicKeyEnc String?
+  telegramToken   String?
+  telegramChatId  String?
+  notifyTelegram  Boolean @default(true)
+  notifyWeb       Boolean @default(true)
+  dailyPlanTime   String  @default("09:00")
+  timezone        String  @default("Europe/Istanbul")
+  assistantName   String  @default("Yeliz")
+  userName        String  @default("Alp Bey")
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

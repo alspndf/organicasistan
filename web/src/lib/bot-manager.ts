@@ -35,8 +35,9 @@ export function startBot(env: Record<string, string>): { ok: boolean; error?: st
     return { ok: false, error: 'Bot zaten çalışıyor.' }
   }
 
-  const botDir  = path.join(process.cwd(), '..', 'bot')
-  const botFile = path.join(botDir, 'index.js')
+  // Build path at runtime to prevent Turbopack static analysis
+  const botDir  = path.resolve(process.cwd(), '..', 'bot')
+  const botFile = path.resolve(botDir, ['index', 'js'].join('.'))
 
   // Merge process.env with provided overrides; expose web/node_modules to bot
   const mergedEnv: NodeJS.ProcessEnv = {

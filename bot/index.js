@@ -797,10 +797,9 @@ async function runAgent(userText) {
       response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 1024,
-        system: [{ type: 'text', text: buildAgentSystem(), cache_control: { type: 'ephemeral' } }],
+        system: buildAgentSystem(),
         tools: AGENT_TOOLS,
         messages,
-        betas: ['prompt-caching-2024-07-31'],
       });
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);

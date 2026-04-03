@@ -132,7 +132,7 @@ export async function classifyMessage(
   }
 
   console.error('[classifyMessage] failed after 2 attempts:', lastErr)
-  return { intent: '__error__', time: null, text: null, new_time: null, day: null }
+  return { intent: '__error__', time: null, text: null, new_time: null, day: null, date: null }
 }
 
 export async function generateDailyPlan(

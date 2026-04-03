@@ -1127,8 +1127,10 @@ console.log('[SYS] Sistem başlatılıyor...');
     }
   }
 
+  const pendingCount = tasks.filter(t => t.status === 'pending').length;
+  const doneCount    = tasks.filter(t => t.status === 'done').length;
   const startupMsg = tasks.length
-    ? `Merhaba ${USER_NAME}! 👋 Bugün ${tasks.length} göreviniz var, devam edelim 💪\n\n${planText()}`
+    ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
     : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
   send(startupMsg);
 })();

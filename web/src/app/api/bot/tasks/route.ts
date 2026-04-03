@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
 
   const tasks = await prisma.task.findMany({
-    where: { userId, date, status: { not: 'done' } },
+    where: { userId, date },
     orderBy: { time: 'asc' },
     select: { id: true, title: true, time: true, status: true },
   })

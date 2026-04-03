@@ -68,7 +68,8 @@ function saveMemory(mem) {
 }
 
 function todayKey() {
-  return DAY_KEYS[new Date().getDay()];
+  const day = new Date().toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul', weekday: 'long' }).toLowerCase();
+  return DAY_KEYS.find(k => day.startsWith(k)) || DAY_KEYS[new Date().getDay()];
 }
 
 function saveWeeklyActivity(day, activity) {
@@ -101,7 +102,7 @@ function loadSchedules() {
 
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
-const nowHH  = () => { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
 
 function parseTime(raw) {
   if (!raw) return null;

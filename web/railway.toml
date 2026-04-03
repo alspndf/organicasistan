@@ -1,9 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm install --legacy-peer-deps && npm run build"
+buildCommand = "cd web && npm install --legacy-peer-deps && npm run build"
 
 [deploy]
-startCommand = "npm run start:prod"
+startCommand = "cd web && npm run start:prod"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

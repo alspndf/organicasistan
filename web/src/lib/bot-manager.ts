@@ -38,9 +38,13 @@ export function startBot(env: Record<string, string>): { ok: boolean; error?: st
     return { ok: false, error: 'Bot zaten çalışıyor.' }
   }
 
-  // Build path at runtime to prevent Turbopack static analysis
-  const botDir  = path.resolve(process.cwd(), '..', 'bot')
-  const botFile = path.resolve(botDir, ['index', 'js'].join('.'))
+  // Path encoded to prevent Turbopack static module analysis
+  // Buffer.from('Li4vYm90', 'base64') === '../bot'
+  // Buffer.from('aW5kZXguanM=', 'base64') === 'index.js'
+  const rel     = Buffer.from('Li4vYm90', 'base64').toString()
+  const entry   = Buffer.from('aW5kZXguanM=', 'base64').toString()
+  const botDir  = process.env.BOT_DIR  || path.resolve(process.cwd(), rel)
+  const botFile = process.env.BOT_FILE || path.resolve(botDir, entry)
 
   // Merge process.env with provided overrides; expose web/node_modules to bot
   const mergedEnv: NodeJS.ProcessEnv = {

@@ -54,7 +54,7 @@ export function startBot(env: Record<string, string>): { ok: boolean; error?: st
   }
 
   try {
-    const child = spawn('node', [botFile], {
+    const child = spawn(process.execPath, [botFile], {
       cwd:   botDir,
       env:   mergedEnv,
       stdio: 'pipe',

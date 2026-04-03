@@ -25,7 +25,7 @@ const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
 const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
-const MODEL          = 'claude-opus-4-6';
+const MODEL          = 'claude-sonnet-4-6';   // 5x cheaper than opus, same quality for assistant tasks
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
   console.error('❌  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID ve ANTHROPIC_API_KEY gerekli.');
@@ -180,7 +180,7 @@ function fireTask(task) {
 
 // ─── Agent: conversation history ─────────────────────────────────────────────
 const conversationHistory = [];
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 10;
 
 function buildAgentSystem() {
   const current  = nowHH();
@@ -773,9 +773,10 @@ async function runAgent(userText) {
       response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 1024,
-        system: buildAgentSystem(),
+        system: [{ type: 'text', text: buildAgentSystem(), cache_control: { type: 'ephemeral' } }],
         tools: AGENT_TOOLS,
         messages,
+        betas: ['prompt-caching-2024-07-31'],
       });
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);

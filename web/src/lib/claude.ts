@@ -107,7 +107,7 @@ export async function classifyMessage(
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await client.messages.create({
-        model: 'claude-opus-4-5',
+        model: 'claude-haiku-4-5-20251001',  // 20x cheaper than opus for simple classification
         max_tokens: 256,
         system: CLASSIFIER_SYSTEM + `\n\nBugünün tarihi: ${date}` + tasksContext,
         messages: [{ role: 'user', content: message }],
@@ -175,7 +175,7 @@ export async function generateDailyPlan(
 
   try {
     const response = await client.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-sonnet-4-6',  // sonnet is sufficient for daily planning
       max_tokens: 512,
       system: PLANNER_SYSTEM,
       messages: [

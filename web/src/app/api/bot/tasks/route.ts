@@ -7,25 +7,24 @@ function isBotAuthorized(req: NextRequest) {
   return secret === botSecret
 }
 
-async function getBotUser(req: NextRequest) {
+async function getBotUserId(req: NextRequest): Promise<string | null> {
   const userId = req.headers.get('x-bot-user-id')
-  if (userId) {
-    const user = await prisma.user.findUnique({ where: { id: userId } })
-    if (user) return user
-  }
-  return prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
+  if (!userId) return null
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
+  return user?.id ?? null
 }
 
 // GET /api/bot/tasks?date=YYYY-MM-DD
 export async function GET(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const userId = await getBotUserId(req)
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
+
   const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
-  const user = await getBotUser(req)
-  if (!user) return NextResponse.json([])
 
   const tasks = await prisma.task.findMany({
-    where: { userId: user.id, date, status: { not: 'done' } },
+    where: { userId, date, status: { not: 'done' } },
     orderBy: { time: 'asc' },
     select: { id: true, title: true, time: true, status: true },
   })
@@ -37,8 +36,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const user = await getBotUser(req)
-  if (!user) return NextResponse.json({ error: 'No user' }, { status: 404 })
+  const userId = await getBotUserId(req)
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
   const body = await req.json()
   const { id, title, time, date, status } = body
@@ -49,7 +48,7 @@ export async function POST(req: NextRequest) {
     update: { title, time, status: status || 'pending' },
     create: {
       id:       id || undefined,
-      userId:   user.id,
+      userId,
       title,
       time,
       date:     taskDate,
@@ -61,14 +60,17 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(task)
 }
 
-// PATCH /api/bot/tasks — update task status
+// PATCH /api/bot/tasks — update task status (userId check ensures cross-user protection)
 export async function PATCH(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const userId = await getBotUserId(req)
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
   const { id, status } = await req.json()
   if (!id || !status) return NextResponse.json({ error: 'id and status required' }, { status: 400 })
 
-  await prisma.task.update({ where: { id }, data: { status } })
+  await prisma.task.updateMany({ where: { id, userId }, data: { status } })
   return NextResponse.json({ ok: true })
 }
 
@@ -76,9 +78,12 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const userId = await getBotUserId(req)
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
+
   const id = req.nextUrl.searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  await prisma.task.delete({ where: { id } }).catch(() => null)
+  await prisma.task.deleteMany({ where: { id, userId } }).catch(() => null)
   return NextResponse.json({ ok: true })
 }

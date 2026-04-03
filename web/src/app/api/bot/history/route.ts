@@ -8,11 +8,8 @@ function isBotAuthorized(req: NextRequest) {
 
 async function getBotUserId(req: NextRequest): Promise<string | null> {
   const userId = req.headers.get('x-bot-user-id')
-  if (userId) {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
-    if (user) return user.id
-  }
-  const user = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
+  if (!userId) return null
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
   return user?.id ?? null
 }
 
@@ -20,7 +17,7 @@ export async function GET(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const userId = await getBotUserId(req)
-  if (!userId) return NextResponse.json({ error: 'No user' }, { status: 404 })
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
   const record = await prisma.memory.findUnique({
     where: { userId_type_key: { userId, type: 'bot', key: 'conversation_history' } },
@@ -39,7 +36,7 @@ export async function PUT(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const userId = await getBotUserId(req)
-  if (!userId) return NextResponse.json({ error: 'No user' }, { status: 404 })
+  if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
   const messages = await req.json()
 

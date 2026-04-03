@@ -8,7 +8,7 @@ export async function GET() {
   const session = await auth()
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  return NextResponse.json(getBotStatus())
+  return NextResponse.json(getBotStatus(session.user.id as string))
 }
 
 export async function POST(req: NextRequest) {
@@ -18,6 +18,8 @@ export async function POST(req: NextRequest) {
   const { action } = await req.json()
 
   if (action === 'stop') {
+    const status = getBotStatus(session.user.id as string)
+    if (!status.isOwner) return NextResponse.json({ ok: false, error: 'Bu botu durdurma yetkiniz yok.' }, { status: 403 })
     return NextResponse.json(stopBot())
   }
 
@@ -59,7 +61,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    return NextResponse.json(startBot(env))
+    return NextResponse.json(startBot(env, session.user.id as string))
   }
 
   return NextResponse.json({ error: 'Geçersiz işlem.' }, { status: 400 })

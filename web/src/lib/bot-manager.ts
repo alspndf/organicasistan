@@ -10,6 +10,7 @@ interface BotState {
   logs: string[]
   startedAt: Date | null
   pid: number | null
+  ownerUserId: string | null
 }
 
 // Persist across Next.js hot-reloads in dev
@@ -20,7 +21,7 @@ declare global {
 
 function getState(): BotState {
   if (!global.__botState) {
-    global.__botState = { process: null, logs: [], startedAt: null, pid: null }
+    global.__botState = { process: null, logs: [], startedAt: null, pid: null, ownerUserId: null }
   }
   return global.__botState
 }
@@ -32,7 +33,7 @@ function appendLog(line: string) {
   if (state.logs.length > 200) state.logs = state.logs.slice(-150)
 }
 
-export function startBot(env: Record<string, string>): { ok: boolean; error?: string } {
+export function startBot(env: Record<string, string>, userId: string): { ok: boolean; error?: string } {
   const state = getState()
   if (state.process && !state.process.killed) {
     return { ok: false, error: 'Bot zaten çalışıyor.' }
@@ -60,10 +61,11 @@ export function startBot(env: Record<string, string>): { ok: boolean; error?: st
       stdio: 'pipe',
     })
 
-    state.process   = child
-    state.startedAt = new Date()
-    state.pid       = child.pid ?? null
-    state.logs      = []
+    state.process     = child
+    state.startedAt   = new Date()
+    state.pid         = child.pid ?? null
+    state.logs        = []
+    state.ownerUserId = userId
 
     child.stdout?.on('data', (data: Buffer) => {
       String(data).split('\n').filter(Boolean).forEach(appendLog)
@@ -102,13 +104,15 @@ export function stopBot(): { ok: boolean; error?: string } {
   return { ok: true }
 }
 
-export function getBotStatus() {
+export function getBotStatus(userId?: string) {
   const state = getState()
   const running = !!(state.process && !state.process.killed)
+  const isOwner = !userId || !state.ownerUserId || state.ownerUserId === userId
   return {
-    running,
-    pid:       state.pid,
-    startedAt: state.startedAt?.toISOString() ?? null,
-    logs:      state.logs.slice(-60),
+    running: running && isOwner,
+    pid:       isOwner ? state.pid : null,
+    startedAt: isOwner ? (state.startedAt?.toISOString() ?? null) : null,
+    logs:      isOwner ? state.logs.slice(-60) : [],
+    isOwner,
   }
 }

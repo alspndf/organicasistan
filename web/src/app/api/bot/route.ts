@@ -18,9 +18,7 @@ export async function POST(req: NextRequest) {
   const { action } = await req.json()
 
   if (action === 'stop') {
-    const status = getBotStatus(session.user.id as string)
-    if (!status.isOwner) return NextResponse.json({ ok: false, error: 'Bu botu durdurma yetkiniz yok.' }, { status: 403 })
-    return NextResponse.json(stopBot())
+    return NextResponse.json(stopBot(session.user.id as string))
   }
 
   if (action === 'start') {

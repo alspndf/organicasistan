@@ -10,31 +10,31 @@ interface BotState {
   logs: string[]
   startedAt: Date | null
   pid: number | null
-  ownerUserId: string | null
 }
 
-// Persist across Next.js hot-reloads in dev
+// Persist across Next.js hot-reloads in dev — keyed by userId
 declare global {
   // eslint-disable-next-line no-var
-  var __botState: BotState | undefined
+  var __botStates: Map<string, BotState> | undefined
 }
 
-function getState(): BotState {
-  if (!global.__botState) {
-    global.__botState = { process: null, logs: [], startedAt: null, pid: null, ownerUserId: null }
+function getState(userId: string): BotState {
+  if (!global.__botStates) global.__botStates = new Map()
+  if (!global.__botStates.has(userId)) {
+    global.__botStates.set(userId, { process: null, logs: [], startedAt: null, pid: null })
   }
-  return global.__botState
+  return global.__botStates.get(userId)!
 }
 
-function appendLog(line: string) {
-  const state = getState()
+function appendLog(userId: string, line: string) {
+  const state = getState(userId)
   const ts = new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' })
   state.logs.push(`[${ts}] ${line}`)
   if (state.logs.length > 200) state.logs = state.logs.slice(-150)
 }
 
 export function startBot(env: Record<string, string>, userId: string): { ok: boolean; error?: string } {
-  const state = getState()
+  const state = getState(userId)
   if (state.process && !state.process.killed) {
     return { ok: false, error: 'Bot zaten çalışıyor.' }
   }
@@ -61,30 +61,29 @@ export function startBot(env: Record<string, string>, userId: string): { ok: boo
       stdio: 'pipe',
     })
 
-    state.process     = child
-    state.startedAt   = new Date()
-    state.pid         = child.pid ?? null
-    state.logs        = []
-    state.ownerUserId = userId
+    state.process   = child
+    state.startedAt = new Date()
+    state.pid       = child.pid ?? null
+    state.logs      = []
 
     child.stdout?.on('data', (data: Buffer) => {
-      String(data).split('\n').filter(Boolean).forEach(appendLog)
+      String(data).split('\n').filter(Boolean).forEach(l => appendLog(userId, l))
     })
     child.stderr?.on('data', (data: Buffer) => {
-      String(data).split('\n').filter(Boolean).forEach((l) => appendLog(`⚠️ ${l}`))
+      String(data).split('\n').filter(Boolean).forEach((l) => appendLog(userId, `⚠️ ${l}`))
     })
     child.on('exit', (code: number | null) => {
-      appendLog(`🔴 Bot durdu (exit: ${code ?? 'signal'})`)
+      appendLog(userId, `🔴 Bot durdu (exit: ${code ?? 'signal'})`)
       state.process = null
       state.pid     = null
     })
     child.on('error', (err: Error) => {
-      appendLog(`❌ Hata: ${err.message}`)
+      appendLog(userId, `❌ Hata: ${err.message}`)
       state.process = null
       state.pid     = null
     })
 
-    appendLog('🟢 Bot başlatıldı.')
+    appendLog(userId, '🟢 Bot başlatıldı.')
     return { ok: true }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -92,27 +91,26 @@ export function startBot(env: Record<string, string>, userId: string): { ok: boo
   }
 }
 
-export function stopBot(): { ok: boolean; error?: string } {
-  const state = getState()
+export function stopBot(userId: string): { ok: boolean; error?: string } {
+  const state = getState(userId)
   if (!state.process || state.process.killed) {
     return { ok: false, error: 'Bot zaten durmuş.' }
   }
   state.process.kill('SIGTERM')
-  appendLog('⏹ Bot durduruldu.')
+  appendLog(userId, '⏹ Bot durduruldu.')
   state.process = null
   state.pid     = null
   return { ok: true }
 }
 
-export function getBotStatus(userId?: string) {
-  const state = getState()
+export function getBotStatus(userId: string) {
+  const state = getState(userId)
   const running = !!(state.process && !state.process.killed)
-  const isOwner = !userId || !state.ownerUserId || state.ownerUserId === userId
   return {
-    running: running && isOwner,
-    pid:       isOwner ? state.pid : null,
-    startedAt: isOwner ? (state.startedAt?.toISOString() ?? null) : null,
-    logs:      isOwner ? state.logs.slice(-60) : [],
-    isOwner,
+    running,
+    pid:       state.pid,
+    startedAt: state.startedAt?.toISOString() ?? null,
+    logs:      state.logs.slice(-60),
+    isOwner:   true,
   }
 }

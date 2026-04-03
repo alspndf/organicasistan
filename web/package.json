@@ -7,7 +7,8 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "start:prod": "prisma db push && node cron-runner.mjs & next start",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "ci": "npm install --legacy-peer-deps"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

@@ -11,11 +11,17 @@ export async function GET(req: NextRequest) {
 
   const userId = session.user.id as string
   const { searchParams } = new URL(req.url)
-  const date = searchParams.get('date') || today()
+  const date = searchParams.get('date')
+  const startDate = searchParams.get('startDate')
+  const endDate = searchParams.get('endDate')
+
+  const where = startDate && endDate
+    ? { userId, date: { gte: startDate, lte: endDate } }
+    : { userId, date: date || today() }
 
   const tasks = await prisma.task.findMany({
-    where: { userId, date },
-    orderBy: { time: 'asc' },
+    where,
+    orderBy: [{ date: 'asc' }, { time: 'asc' }],
   })
 
   return NextResponse.json(tasks)

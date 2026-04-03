@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import {
   LayoutDashboard,
-  CheckSquare,
+  CalendarDays,
   Calendar,
   MessageSquare,
   Mail,
@@ -23,7 +23,7 @@ interface SidebarProps {
 
 const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/tasks', icon: CheckSquare, label: 'Görevler' },
+  { href: '/tasks', icon: CalendarDays, label: 'Takvim' },
   { href: '/routines', icon: Repeat2, label: 'Günlük Rutinler' },
   { href: '/schedule', icon: Calendar, label: 'Haftalık Plan' },
   { href: '/chat', icon: MessageSquare, label: 'Sohbet' },

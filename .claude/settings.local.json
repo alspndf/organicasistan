@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check index.js)",
+      "Bash(node --check /Users/alperenkocaman/organic_assistant/bot/index.js)",
+      "Bash(node -e \":*)",
+      "Bash(npm install:*)",
+      "Bash(DATABASE_URL=\"file:../organic_assistant.db\" npx prisma migrate dev --name init)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(cat node_modules/next/dist/docs/01-app/02-guides/*.md)"
+    ]
+  }
+}

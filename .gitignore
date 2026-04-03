@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js
+web/.next/
+web/out/
+
+# Env files — NEVER commit secrets
+.env
+.env.local
+.env*.local
+bot/.env
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Bot memory (user-specific, not code)
+bot/memory.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+web/build/
+*.tsbuildinfo
+web/next-env.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# Prisma generated client (re-generated on build)
+web/src/generated/

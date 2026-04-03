@@ -1,0 +1,96 @@
+{
+  "date": "2026-04-01",
+  "blocks": [
+    {
+      "time": "09:17",
+      "task_id": "task_16",
+      "title": "Kahvalt\u0131 haz\u0131rla",
+      "status": "pending"
+    },
+    {
+      "time": "16:00",
+      "task_id": "task_1",
+      "title": "G\u00fcnl\u00fck/Haftal\u0131k/Ayl\u0131k Hedef \u015eablonlar\u0131 Olu\u015ftur",
+      "status": "done"
+    },
+    {
+      "time": "16:00",
+      "task_id": "task_12",
+      "title": "Ka\u011fan Emre and Alperen kocaman",
+      "status": "pending"
+    },
+    {
+      "time": "16:15",
+      "task_id": "task_6",
+      "title": "Amerika telefonunu kur",
+      "status": "pending"
+    },
+    {
+      "time": "16:30",
+      "task_id": "task_4",
+      "title": "AI Code Proje Yol Haritas\u0131 Belirle",
+      "status": "pending"
+    },
+    {
+      "time": "17:00",
+      "task_id": "task_2",
+      "title": "Dropshipping Operasyon Takvimine \u00c7\u0131kar",
+      "status": "done"
+    },
+    {
+      "time": "17:00",
+      "task_id": "task_13",
+      "title": "Emincan \u00c7aygara and Alperen kocaman",
+      "status": "pending"
+    },
+    {
+      "time": "17:15",
+      "task_id": "task_7",
+      "title": "Kilin sosyal medyay\u0131 haz\u0131rla",
+      "status": "pending"
+    },
+    {
+      "time": "18:00",
+      "task_id": "task_8",
+      "title": "Yeni \u00fcr\u00fcn bul, burner yap",
+      "status": "pending"
+    },
+    {
+      "time": "19:00",
+      "task_id": "task_5",
+      "title": "Ba\u015far\u0131m Takip & Raporlama Sistemi Kur",
+      "status": "pending"
+    },
+    {
+      "time": "19:30",
+      "task_id": "task_9",
+      "title": "Giter \u00fcr\u00fcn\u00fcn\u00fcn sto\u011funu sor",
+      "status": "pending"
+    },
+    {
+      "time": "20:00",
+      "task_id": "task_3",
+      "title": "Ment\u00f6rl\u00fck Program Plan\u0131n\u0131 Yap\u0131land\u0131r",
+      "status": "done"
+    },
+    {
+      "time": "20:00",
+      "task_id": "task_14",
+      "title": "Video edit ve payla\u015f\u0131m",
+      "status": "pending"
+    },
+    {
+      "time": "21:00",
+      "task_id": "task_10",
+      "title": "Kilin background",
+      "status": "pending"
+    },
+    {
+      "time": "21:30",
+      "task_id": "task_11",
+      "title": "AI asistan\u0131 d\u00fczelt",
+      "status": "pending"
+    }
+  ],
+  "locked": false
+}

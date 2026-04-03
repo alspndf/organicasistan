@@ -1,0 +1,146 @@
+[
+  {
+    "id": "task_1",
+    "title": "G\u00fcnl\u00fck/Haftal\u0131k/Ayl\u0131k Hedef \u015eablonlar\u0131 Olu\u015ftur",
+    "description": "Her i\u015f kolu i\u00e7in g\u00fcnl\u00fck yap\u0131lacaklar listesi, haftal\u0131k sprint hedefleri ve ayl\u0131k b\u00fcy\u00fcme/gelir hedeflerini i\u00e7eren tekrarlanabilir \u015fablonlar haz\u0131rlamak.",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "done",
+    "notes": ""
+  },
+  {
+    "id": "task_2",
+    "title": "Dropshipping Operasyon Takvimine \u00c7\u0131kar",
+    "description": "Organik dropshipping i\u00e7in \u00fcr\u00fcn ara\u015ft\u0131rma, i\u00e7erik \u00fcretimi, sipari\u015f y\u00f6netimi, tedarik\u00e7i ileti\u015fimi gibi g\u00fcnl\u00fck operasyonel g\u00f6revleri takvime yerle\u015ftirmek.",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "done",
+    "notes": ""
+  },
+  {
+    "id": "task_3",
+    "title": "Ment\u00f6rl\u00fck Program Plan\u0131n\u0131 Yap\u0131land\u0131r",
+    "description": "Ment\u00f6rl\u00fck \u00f6\u011frencileri i\u00e7in ders planlar\u0131, toplant\u0131 takvimleri, ilerleme takibi ve i\u00e7erik haz\u0131rl\u0131\u011f\u0131 g\u00f6revlerini d\u00fczenlemek.",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "done",
+    "notes": ""
+  },
+  {
+    "id": "task_4",
+    "title": "AI Code Proje Yol Haritas\u0131 Belirle",
+    "description": "AI code geli\u015ftirme projeleri i\u00e7in sprint planlamas\u0131, feature backlog, bug tracking ve release takvimi olu\u015fturmak.",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_5",
+    "title": "Ba\u015far\u0131m Takip & Raporlama Sistemi Kur",
+    "description": "Tamamlanan g\u00f6revler, ula\u015f\u0131lan hedefler ve KPI'lar\u0131n Telegram \u00fczerinden g\u00fcnl\u00fck \u00f6zet, haftal\u0131k rapor ve ayl\u0131k performans de\u011ferlendirmesi olarak raporlanmas\u0131.",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_6",
+    "title": "Amerika telefonunu kur",
+    "description": "Amerika telefonunu kurulumu yap",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_7",
+    "title": "Kilin sosyal medyay\u0131 haz\u0131rla",
+    "description": "Kilin i\u00e7in sosyal medya hesaplar\u0131n\u0131/i\u00e7eriklerini haz\u0131rla",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_8",
+    "title": "Yeni \u00fcr\u00fcn bul, burner yap",
+    "description": "Yeni \u00fcr\u00fcn ara\u015ft\u0131rmas\u0131 yap ve burner hesap/sayfa olu\u015ftur",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_9",
+    "title": "Giter \u00fcr\u00fcn\u00fcn\u00fcn sto\u011funu sor",
+    "description": "Giter \u00fcr\u00fcn\u00fc i\u00e7in stok durumunu tedarik\u00e7iye sor",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_10",
+    "title": "Kilin background",
+    "description": "Kilin i\u00e7in background tasar\u0131m\u0131/haz\u0131rl\u0131\u011f\u0131 yap",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_11",
+    "title": "AI asistan\u0131 d\u00fczelt",
+    "description": "AI asistan botundaki sorunlar\u0131 tespit et ve d\u00fczelt",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_12",
+    "title": "Ka\u011fan Emre and Alperen kocaman",
+    "description": "Ka\u011fan Emre and Alperen kocaman g\u00f6r\u00fc\u015fmesi",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_13",
+    "title": "Emincan \u00c7aygara and Alperen kocaman",
+    "description": "Emincan \u00c7aygara and Alperen kocaman g\u00f6r\u00fc\u015fmesi",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_14",
+    "title": "Video edit ve payla\u015f\u0131m",
+    "description": "Video edit ve payla\u015f\u0131m",
+    "priority": "high",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_15",
+    "title": "Platforma g\u00f6r\u00fc\u015ft\u00fc\u011f\u00fcm 1:1'leri ge\u00e7ir",
+    "description": "G\u00f6r\u00fc\u015f\u00fclen 1:1'leri platforma kaydet",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  },
+  {
+    "id": "task_16",
+    "title": "Kahvalt\u0131 haz\u0131rla",
+    "description": "Kahvalt\u0131 haz\u0131rla",
+    "priority": "medium",
+    "due_date": "today",
+    "status": "pending",
+    "notes": ""
+  }
+]

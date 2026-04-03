@@ -1,0 +1,63 @@
+[2026-04-01 12:22:03] TO=user
+🗓️ **GÜNLÜK GÖREV PLANI** — Bugün
+
+Merhaba! İşte bugün seni bekleyen görevlerin:
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+🔴 **YÜKSEK ÖNCELİK**
+
+1️⃣ **İçerik Takvimi & SEO Stratejisi Oluştur**
+   📌 Hedef anahtar kelimeleri belirle, aylık içerik takvimi hazırla ve blog/sosyal medya içeriklerini SEO odaklı planla.
+   ⏰ Son tarih: Bugün | 🔖 Durum: Bekliyor
+
+2️⃣ **Sipariş Otomasyon Aracı Entegre Et (DSers/AutoDS)**
+   📌 DSers, AutoDS veya benzeri bir otomasyon aracını mağazaya entegre ederek sipariş iletimi, stok takibi ve kargo bildirimlerini otomatikleştir.
+   ⏰ Son tarih: Bugün | 🔖 Durum: Bekliyor
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+🟡 **ORTA ÖNCELİK**
+
+3️⃣ **Sosyal Medya Otomasyonu Kur (Planlama & Paylaşım)**
+   📌 Buffer, Later veya benzeri araçlarla sosyal medya paylaşımlarını otomatik planla; içerik üretim sürecini şablonlaştır.
+   ⏰ Son tarih: Bugün | 🔖 Durum: Bekliyor
+
+4️⃣ **Müşteri İletişimini Otomatize Et (E-posta & Chatbot)**
+   📌 Otomatik e-posta dizileri (sipariş onayı, kargo bildirimi, geri bildirim) ve chatbot kurarak müşteri hizmetlerini otomatize et.
+   ⏰ Son tarih: Bugün | 🔖 Durum: Bekliyor
+
+5️⃣ **KPI Dashboard'u Oluştur & Haftalık Analiz Yap**
+   📌 Google Analytics, mağaza verileri ve sosyal medya metriklerini tek bir dashboard'da topla; haftalık performans analizi rutini oluştur.
+   ⏰ Son tarih: Bugün | 🔖 Durum: Bekliyor
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 **ÖZET**
+• Toplam görev: **5**
+• 🔴 Yüksek öncelik: **2**
+• 🟡 Orta öncelik: **3**
+• ✅ Tamamlanan: **0**
+
+💡 **Öneri:** Önce yüksek öncelikli görevlerle başla — SEO stratejisi ve sipariş otomasyonu bugünün en kritik adımları!
+
+Herhangi bir görevle ilgili yardıma ihtiyacın olursa yaz yeter. Başarılı bir gün! 💪
+------------------------------------------------------------
+[2026-04-01 12:22:21] TO=user
+📬 **Daily Email Summary** — Jan 15, 2024
+
+You have **2 important emails** today:
+
+1️⃣ **Project deadline reminder** — from team@work.com
+   → The project presentation is due this Friday. Please prepare your slides.
+
+2️⃣ **Check-in on your goals** — from manager@work.com
+   → Your manager is checking in on your progress and offering support.
+
+📌 *1 other email (newsletter) was skipped as non-essential.*
+
+Let me know if you'd like to take any action on these!
+------------------------------------------------------------
+[2026-04-01 12:22:28] TO=user
+Hi there! 👋 Could you please share a progress update on your current task? Let me know how things are going!
+------------------------------------------------------------

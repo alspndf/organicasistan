@@ -1,0 +1,30 @@
+[
+  {
+    "id": "reminder_1",
+    "task_id": "task_12",
+    "message": "\u23f0 5 dk sonra: Ka\u011fan Emre and Alperen kocaman (16:00)",
+    "remind_at": "15:55",
+    "sent": false
+  },
+  {
+    "id": "reminder_2",
+    "task_id": "task_12",
+    "message": "\u23f0 Hat\u0131rlatma: Ka\u011fan Emre and Alperen kocaman - \u015eimdi ba\u015flama zaman\u0131!",
+    "remind_at": "16:00",
+    "sent": false
+  },
+  {
+    "id": "reminder_3",
+    "task_id": "task_15",
+    "message": "\u23f0 Hat\u0131rlatma: Kahvalt\u0131 haz\u0131rla!",
+    "remind_at": "09:17",
+    "sent": false
+  },
+  {
+    "id": "reminder_4",
+    "task_id": "task_6",
+    "message": "\ud83d\udcf1 Hat\u0131rlatma: Telefon kurulumu yap\u0131lacak! (Amerika telefonunu kur)",
+    "remind_at": "09:30",
+    "sent": false
+  }
+]

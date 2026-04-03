@@ -23,8 +23,9 @@ const https       = require('https');
 const TOKEN         = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const USER_NAME     = process.env.BOT_USER_NAME || 'Kullanıcı';
-const MODEL         = 'claude-opus-4-6';
+const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
+const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
+const MODEL          = 'claude-opus-4-6';
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
   console.error('❌  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID ve ANTHROPIC_API_KEY gerekli.');
@@ -191,7 +192,7 @@ function buildAgentSystem() {
     : 'Görev yok.';
   const pending  = pendingTasks().length;
 
-  let sys = `Sen Yeliz'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki ve proaktifsin.
+  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki ve proaktifsin.
 
 ## Şu Anki Durum
 Saat: ${current}
@@ -396,7 +397,7 @@ async function runDailyAnalysis() {
   try {
     const r = await anthropic.messages.create({
       model: MODEL, max_tokens: 512,
-      system: `Sen Yeliz, ${USER_NAME}'in asistanısın. Kısa, samimi ve motive edici bir günlük analiz yaz.`,
+      system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in asistanısın. Kısa, samimi ve motive edici bir günlük analiz yaz.`,
       messages: [{
         role: 'user', content:
           `Bugünün görev özeti:\n` +
@@ -1045,6 +1046,6 @@ console.log('[SYS] Sistem başlatılıyor...');
 
   const startupMsg = tasks.length
     ? `Merhaba ${USER_NAME}! 👋 Bugün ${tasks.length} göreviniz var, devam edelim 💪\n\n${planText()}`
-    : `Merhaba ${USER_NAME}! 👋 Ben Yeliz, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
+    : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
   send(startupMsg);
 })();

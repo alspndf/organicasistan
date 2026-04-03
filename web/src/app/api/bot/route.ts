@@ -31,8 +31,9 @@ export async function POST(req: NextRequest) {
     const env: Record<string, string> = {
       WEB_APP_URL:  process.env.NEXTAUTH_URL || 'http://localhost:3000',
       BOT_SECRET:   process.env.BOT_SECRET  || 'organic-bot-internal',
-      WEB_USER_ID:  session.user.id as string,
-      BOT_USER_NAME: settings?.userName || user?.name || 'Kullanıcı',
+      WEB_USER_ID:        session.user.id as string,
+      BOT_USER_NAME:      settings?.userName || user?.name || 'Kullanıcı',
+      BOT_ASSISTANT_NAME: settings?.assistantName || 'Yeliz',
     }
 
     // Telegram token: settings first, then .env fallback

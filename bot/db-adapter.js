@@ -8,9 +8,12 @@
 const WEB_URL = process.env.WEB_APP_URL || 'http://localhost:3000';
 const SECRET  = process.env.BOT_SECRET  || 'organic-bot-internal';
 
+const USER_ID = process.env.WEB_USER_ID || '';
+
 const HEADERS = {
   'Content-Type': 'application/json',
   'x-bot-secret': SECRET,
+  'x-bot-user-id': USER_ID,
 };
 
 const TODAY = () => new Date().toISOString().split('T')[0];

@@ -7,7 +7,12 @@ function isBotAuthorized(req: NextRequest) {
   return secret === botSecret
 }
 
-async function getBotUser() {
+async function getBotUser(req: NextRequest) {
+  const userId = req.headers.get('x-bot-user-id')
+  if (userId) {
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (user) return user
+  }
   return prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
 }
 
@@ -16,7 +21,7 @@ export async function GET(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
-  const user = await getBotUser()
+  const user = await getBotUser(req)
   if (!user) return NextResponse.json([])
 
   const tasks = await prisma.task.findMany({
@@ -32,7 +37,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const user = await getBotUser()
+  const user = await getBotUser(req)
   if (!user) return NextResponse.json({ error: 'No user' }, { status: 404 })
 
   const body = await req.json()

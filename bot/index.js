@@ -23,6 +23,7 @@ const https       = require('https');
 const TOKEN         = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const USER_NAME     = process.env.BOT_USER_NAME || 'Kullanıcı';
 const MODEL         = 'claude-opus-4-6';
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
@@ -168,7 +169,7 @@ function sendButtons(text, buttons) {
 
 function fireTask(task) {
   return sendButtons(
-    `⏰ Alp Bey, sıradaki göreviniz!\n\n📌 ${task.title}\n\nTamamladınız mı?`,
+    `⏰ ${USER_NAME}, sıradaki göreviniz!\n\n📌 ${task.title}\n\nTamamladınız mı?`,
     [
       { label: '✅ Yaptım',   data: `DONE:${task.id}` },
       { label: '❌ Yapmadım', data: `NOTDONE:${task.id}` },
@@ -190,7 +191,7 @@ function buildAgentSystem() {
     : 'Görev yok.';
   const pending  = pendingTasks().length;
 
-  let sys = `Sen Yeliz'sin — Alp Bey'in kişisel asistanı. Samimi, zeki ve proaktifsin.
+  let sys = `Sen Yeliz'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki ve proaktifsin.
 
 ## Şu Anki Durum
 Saat: ${current}
@@ -215,7 +216,7 @@ ${taskList}`;
 - Proaktif ol: günün durumuna göre öneriler sun
 - Görevi silmeden önce onay iste (delete_tasks confirmed:false ile)
 - Bir görevi birden fazla şekilde tanımla: saat, numara veya anahtar kelime
-- Alp Bey'e saygılı ve motive edici ol`;
+- ${USER_NAME}'e saygılı ve motive edici ol`;
 
   return sys;
 }
@@ -395,7 +396,7 @@ async function runDailyAnalysis() {
   try {
     const r = await anthropic.messages.create({
       model: MODEL, max_tokens: 512,
-      system: 'Sen Yeliz, Alp Bey\'in asistanısın. Kısa, samimi ve motive edici bir günlük analiz yaz.',
+      system: `Sen Yeliz, ${USER_NAME}'in asistanısın. Kısa, samimi ve motive edici bir günlük analiz yaz.`,
       messages: [{
         role: 'user', content:
           `Bugünün görev özeti:\n` +
@@ -408,8 +409,8 @@ async function runDailyAnalysis() {
     summary = r.content[0].text.trim();
   } catch (e) {
     summary = done.length
-      ? `Alp Bey, bugün ${done.length} görev tamamladınız 🎉`
-      : 'Alp Bey, bugün görev tamamlanmadı.';
+      ? `${USER_NAME}, bugün ${done.length} görev tamamladınız 🎉`
+      : '${USER_NAME}, bugün görev tamamlanmadı.';
   }
 
   send(`🌙 *Gece Analizi*\n\n${summary}`);
@@ -777,7 +778,7 @@ async function runAgent(userText) {
       });
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);
-      send('Üzgünüm Alp Bey, bir hata oluştu. Tekrar dener misiniz? 🙏');
+      send('Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏');
       return;
     }
 
@@ -812,7 +813,7 @@ async function runAgent(userText) {
     while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
   }
 
-  send('Üzgünüm Alp Bey, işlem tamamlanamadı. Tekrar dener misiniz?');
+  send('Üzgünüm ${USER_NAME}, işlem tamamlanamadı. Tekrar dener misiniz?');
 }
 
 // ─── Scheduler (30s) ─────────────────────────────────────────────────────────
@@ -824,7 +825,7 @@ setInterval(() => {
     const preKey = `pre:${task.id}:${task.time}`;
     if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
       firedKeys.add(preKey);
-      send(`⏳ Alp Bey, 5 dakika sonra: ${task.title} 🔔`);
+      send(`⏳ ${USER_NAME}, 5 dakika sonra: ${task.title} 🔔`);
       console.log(`[PRE] ${task.title}`);
     }
 
@@ -849,7 +850,7 @@ bot.on('callback_query', async query => {
       task.status = 'done';
       pendingReschedule = null;
       dbAdapter?.updateTaskStatus(task.id, 'done');
-      send(`✅ Süper Alp Bey, aferin! 🎉\n${task.title} tamamlandı.`);
+      send(`✅ Süper ${USER_NAME}, aferin! 🎉\n${task.title} tamamlandı.`);
       console.log(`[DONE] ${task.title}`);
     }
     return;
@@ -859,7 +860,7 @@ bot.on('callback_query', async query => {
     const task = tasks.find(t => t.id === data.slice(8));
     if (task) {
       pendingReschedule = task.id;
-      send('Sorun değil Alp Bey 😊 Kaça taşıyalım?');
+      send('Sorun değil ${USER_NAME} 😊 Kaça taşıyalım?');
     }
     return;
   }
@@ -919,7 +920,7 @@ bot.on('message', async msg => {
       return;
     } else if (/^(hayır|hayir|no|vazgeç|vazgec|istemiyorum)$/.test(lower)) {
       pendingAnalysisReschedule = null;
-      send('Tamam Alp Bey, eklemedim. İyi geceler! 🌙');
+      send('Tamam ${USER_NAME}, eklemedim. İyi geceler! 🌙');
       return;
     }
     // Unrelated message — clear state and process normally
@@ -933,11 +934,11 @@ bot.on('message', async msg => {
       const deleted = tasks.filter(t => pendingDeleteIds.includes(t.id));
       tasks = tasks.filter(t => !pendingDeleteIds.includes(t.id));
       pendingDeleteIds = [];
-      send('🗑 Silindi Alp Bey:\n' + deleted.map(t => `• ${t.time} — ${t.title}`).join('\n'));
+      send('🗑 Silindi ${USER_NAME}:\n' + deleted.map(t => `• ${t.time} — ${t.title}`).join('\n'));
       return;
     } else if (/^(hayır|hayir|no|vazgeç|vazgec|iptal)$/.test(lower)) {
       pendingDeleteIds = [];
-      send('✅ Tamam Alp Bey, iptal edilmedi.');
+      send('✅ Tamam ${USER_NAME}, iptal edilmedi.');
       return;
     } else {
       // Unrelated message — clear confirm state and process normally
@@ -949,7 +950,7 @@ bot.on('message', async msg => {
     await runAgent(text);
   } catch (err) {
     console.error('[MSG] Kritik hata:', err.message);
-    send('Üzgünüm Alp Bey, bir hata oluştu. Tekrar dener misiniz? 🙏');
+    send('Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏');
   }
 });
 
@@ -999,10 +1000,10 @@ cron.schedule('0 11 * * *', () => {
 const INACTIVITY_MS = 90 * 60 * 1000; // 90 minutes
 
 const INACTIVITY_MESSAGES = [
-  'Alp Bey, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?',
-  'Alp Bey, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?',
-  'Alp Bey? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?',
-  'Alp Bey, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!',
+  '${USER_NAME}, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?',
+  '${USER_NAME}, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?',
+  '${USER_NAME}? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?',
+  '${USER_NAME}, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!',
 ];
 
 setInterval(() => {
@@ -1043,7 +1044,7 @@ console.log('[SYS] Sistem başlatılıyor...');
   }
 
   const startupMsg = tasks.length
-    ? `Merhaba Alp Bey! 👋 Bugün ${tasks.length} göreviniz var, devam edelim 💪\n\n${planText()}`
-    : `Merhaba Alp Bey! 👋 Ben Yeliz, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
+    ? `Merhaba ${USER_NAME}! 👋 Bugün ${tasks.length} göreviniz var, devam edelim 💪\n\n${planText()}`
+    : `Merhaba ${USER_NAME}! 👋 Ben Yeliz, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
   send(startupMsg);
 })();

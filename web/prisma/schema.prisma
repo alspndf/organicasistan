@@ -126,7 +126,7 @@ model UserSettings {
   dailyPlanTime   String  @default("09:00")
   timezone        String  @default("Europe/Istanbul")
   assistantName   String  @default("Yeliz")
-  userName        String  @default("Alp Bey")
+  userName        String  @default("")
   updatedAt       DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

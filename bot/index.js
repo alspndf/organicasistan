@@ -413,7 +413,7 @@ async function runDailyAnalysis() {
   } catch (e) {
     summary = done.length
       ? `${USER_NAME}, bugün ${done.length} görev tamamladınız 🎉`
-      : '${USER_NAME}, bugün görev tamamlanmadı.';
+      : `${USER_NAME}, bugün görev tamamlanmadı.`;
   }
 
   send(`🌙 *Gece Analizi*\n\n${summary}`);
@@ -804,7 +804,7 @@ async function runAgent(userText) {
       });
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);
-      send('Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏');
+      send(`Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏`);
       return;
     }
 
@@ -839,7 +839,7 @@ async function runAgent(userText) {
     while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
   }
 
-  send('Üzgünüm ${USER_NAME}, işlem tamamlanamadı. Tekrar dener misiniz?');
+  send(`Üzgünüm ${USER_NAME}, işlem tamamlanamadı. Tekrar dener misiniz?`);
 }
 
 // ─── Scheduler (30s) ─────────────────────────────────────────────────────────
@@ -886,7 +886,7 @@ bot.on('callback_query', async query => {
     const task = tasks.find(t => t.id === data.slice(8));
     if (task) {
       pendingReschedule = task.id;
-      send('Sorun değil ${USER_NAME} 😊 Kaça taşıyalım?');
+      send(`Sorun değil ${USER_NAME} 😊 Kaça taşıyalım?`);
     }
     return;
   }
@@ -946,7 +946,7 @@ bot.on('message', async msg => {
       return;
     } else if (/^(hayır|hayir|no|vazgeç|vazgec|istemiyorum)$/.test(lower)) {
       pendingAnalysisReschedule = null;
-      send('Tamam ${USER_NAME}, eklemedim. İyi geceler! 🌙');
+      send(`Tamam ${USER_NAME}, eklemedim. İyi geceler! 🌙`);
       return;
     }
     // Unrelated message — clear state and process normally
@@ -960,11 +960,11 @@ bot.on('message', async msg => {
       const deleted = tasks.filter(t => pendingDeleteIds.includes(t.id));
       tasks = tasks.filter(t => !pendingDeleteIds.includes(t.id));
       pendingDeleteIds = [];
-      send('🗑 Silindi ${USER_NAME}:\n' + deleted.map(t => `• ${t.time} — ${t.title}`).join('\n'));
+      send(`🗑 Silindi ${USER_NAME}:\n` + deleted.map(t => `• ${t.time} — ${t.title}`).join('\n'));
       return;
     } else if (/^(hayır|hayir|no|vazgeç|vazgec|iptal)$/.test(lower)) {
       pendingDeleteIds = [];
-      send('✅ Tamam ${USER_NAME}, iptal edilmedi.');
+      send(`✅ Tamam ${USER_NAME}, iptal edilmedi.`);
       return;
     } else {
       // Unrelated message — clear confirm state and process normally
@@ -976,7 +976,7 @@ bot.on('message', async msg => {
     await runAgent(text);
   } catch (err) {
     console.error('[MSG] Kritik hata:', err.message);
-    send('Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏');
+    send(`Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏`);
   }
 });
 
@@ -1026,10 +1026,10 @@ cron.schedule('0 11 * * *', () => {
 const INACTIVITY_MS = 90 * 60 * 1000; // 90 minutes
 
 const INACTIVITY_MESSAGES = [
-  '${USER_NAME}, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?',
-  '${USER_NAME}, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?',
-  '${USER_NAME}? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?',
-  '${USER_NAME}, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!',
+  `${USER_NAME}, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?`,
+  `${USER_NAME}, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?`,
+  `${USER_NAME}? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?`,
+  `${USER_NAME}, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!`,
 ];
 
 setInterval(() => {

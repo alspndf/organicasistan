@@ -1,6 +1,9 @@
-import { spawn } from 'child_process'
-import type { ChildProcess } from 'child_process'
+import type { ChildProcess, SpawnOptions } from 'child_process'
 import path from 'path'
+
+// Dynamic require prevents Turbopack from analyzing spawn arguments as module paths
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { spawn } = require('child_process') as typeof import('child_process')
 
 interface BotState {
   process: ChildProcess | null

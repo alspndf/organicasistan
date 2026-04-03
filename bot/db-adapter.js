@@ -54,4 +54,13 @@ async function getTodayTasks() {
   }
 }
 
-module.exports = { syncTask, updateTaskStatus, deleteTask, getTodayTasks };
+/** Save a daily routine to the web app DB (fire-and-forget). */
+function saveRoutine(text, time) {
+  fetch(`${WEB_URL}/api/bot/routines`, {
+    method:  'POST',
+    headers: HEADERS,
+    body:    JSON.stringify({ text, time: time || null }),
+  }).catch(e => console.warn('[DB-Adapter] saveRoutine error:', e.message));
+}
+
+module.exports = { syncTask, updateTaskStatus, deleteTask, getTodayTasks, saveRoutine };

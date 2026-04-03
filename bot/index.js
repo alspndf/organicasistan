@@ -315,6 +315,18 @@ const AGENT_TOOLS = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'save_routine',
+    description: 'Günlük rutin veya alışkanlık kaydet. "Her gün sabah X\'te Y yap", "hergün yapılacaklar" gibi taleplerde kullan. Web uygulamasına kaydeder, kalıcıdır.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Rutin açıklaması (örn: "Her gün sabah 7\'de günlük plan özeti gönder")' },
+        time: { type: 'string', description: 'HH:MM formatında saat (opsiyonel)' },
+      },
+      required: ['text'],
+    },
+  },
+  {
     name: 'set_schedule',
     description: 'Kullanıcının "her gece X\'te Y yap" gibi tekrarlayan zamanlı bir görev tanımlamasını hafızaya kaydet. Sadece açıkça tekrarlayan bir zamanlama istendiğinde kullan.',
     input_schema: {
@@ -694,6 +706,13 @@ async function executeTool(name, input) {
         saveRule(input.value);
         return `🧠 Alışkanlık kaydedildi: ${input.value}`;
       }
+    }
+
+    case 'save_routine': {
+      const routineText = input.text;
+      const routineTime = input.time || null;
+      dbAdapter?.saveRoutine(routineText, routineTime);
+      return `🔁 Günlük rutin kaydedildi: "${routineText}"${routineTime ? ` (${routineTime})` : ''} — Web uygulamasında Günlük Rutinler bölümünde görünür.`;
     }
 
     case 'set_schedule': {

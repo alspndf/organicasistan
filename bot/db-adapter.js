@@ -66,4 +66,16 @@ function saveRoutine(text, time) {
   }).catch(e => console.warn('[DB-Adapter] saveRoutine error:', e.message));
 }
 
-module.exports = { syncTask, updateTaskStatus, deleteTask, getTodayTasks, saveRoutine };
+/** Fetch all saved daily routines. Returns a Promise. */
+async function getRoutines() {
+  try {
+    const res = await fetch(`${WEB_URL}/api/bot/routines`, { headers: HEADERS });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (e) {
+    console.warn('[DB-Adapter] getRoutines error:', e.message);
+    return [];
+  }
+}
+
+module.exports = { syncTask, updateTaskStatus, deleteTask, getTodayTasks, saveRoutine, getRoutines };

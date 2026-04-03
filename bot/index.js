@@ -37,6 +37,7 @@ const bot       = new TelegramBot(TOKEN, { polling: true });
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let tasks       = [];          // { id, title, time, status: 'pending'|'done' }
+let routines    = [];          // { id, text, time } — loaded from DB on startup
 let idCounter   = 1;
 const firedKeys = new Set();   // prevent double-firing
 let pendingReschedule          = null;  // task.id waiting for a new time from user
@@ -210,6 +211,11 @@ ${taskList}`;
   if (mem.rules.length) {
     sys += `\n\n## Alışkanlıklar / Kurallar\n${mem.rules.join('\n')}`;
   }
+  if (routines.length) {
+    sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
+      `- ${r.time ? `${r.time} — ` : ''}${r.text}`
+    ).join('\n');
+  }
 
   sys += `\n\n## Davranış Kuralları
 - Araçları kullanarak görevleri gerçek olarak yönet, sadece söz verme
@@ -329,6 +335,11 @@ const AGENT_TOOLS = [
       },
       required: ['text'],
     },
+  },
+  {
+    name: 'get_routines',
+    description: 'Kayıtlı günlük rutinleri listele. Kullanıcı rutinlerini sormak veya görmek istediğinde kullan.',
+    input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'set_schedule',
@@ -741,6 +752,15 @@ async function executeTool(name, input) {
       return `🔁 Günlük rutin kaydedildi: "${routineText}" — Web uygulamasında Günlük Rutinler bölümünde görünür.`;
     }
 
+    case 'get_routines': {
+      if (!dbAdapter) return '❌ DB bağlantısı yok.';
+      const routines = await dbAdapter.getRoutines();
+      if (!routines.length) return '📋 Kayıtlı günlük rutin yok.';
+      return '📋 Günlük rutinler:\n' + routines.map((r, i) =>
+        `${i + 1}. ${r.time ? `${r.time} — ` : ''}${r.text}`
+      ).join('\n');
+    }
+
     case 'set_schedule': {
       const s = { time: input.time, action: input.action, description: input.description };
       saveSchedule(s);
@@ -1065,6 +1085,23 @@ console.log('[SYS] Sistem başlatılıyor...');
       }
     } catch (e) {
       console.warn('[SYS] Görevler yüklenemedi:', e.message);
+    }
+
+    // Load routines and register their cron jobs
+    try {
+      const savedRoutines = await dbAdapter.getRoutines();
+      if (savedRoutines && savedRoutines.length) {
+        routines = savedRoutines;
+        console.log(`[SYS] ${routines.length} rutin yüklendi.`);
+        for (const r of routines) {
+          if (r.time) {
+            const s = { time: r.time, action: 'routine', text: r.text, description: r.text };
+            registerSchedule(s);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[SYS] Rutinler yüklenemedi:', e.message);
     }
   }
 

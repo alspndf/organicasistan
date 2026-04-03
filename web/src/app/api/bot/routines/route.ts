@@ -16,6 +16,20 @@ async function getBotUser(req: NextRequest) {
   return prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
 }
 
+export async function GET(req: NextRequest) {
+  if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const user = await getBotUser(req)
+  if (!user) return NextResponse.json({ error: 'No user found' }, { status: 404 })
+
+  const routines = await prisma.dailyRoutine.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  return NextResponse.json(routines)
+}
+
 export async function POST(req: NextRequest) {
   if (!isBotAuthorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

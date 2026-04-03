@@ -434,6 +434,60 @@ function registerSavedSchedules() {
   if (schedules.length) console.log(`[SYS] ${schedules.length} kayıtlı zamanlama yüklendi.`);
 }
 
+// ─── Groq: voice → text ───────────────────────────────────────────────────────
+async function transcribeVoice(fileId) {
+  const GROQ_KEY = process.env.GROQ_API_KEY;
+  if (!GROQ_KEY) return null;
+
+  const fileLink = await bot.getFileLink(fileId);
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    https.get(fileLink, res => {
+      res.on('data', c => chunks.push(c));
+      res.on('end', resolve);
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+  const audioBuffer = Buffer.concat(chunks);
+
+  // Send to Groq Whisper via multipart form
+  const boundary = '----FormBoundary' + Date.now();
+  const filename = 'voice.ogg';
+  const disposition = `form-data; name="file"; filename="${filename}"`;
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: ${disposition}\r\nContent-Type: audio/ogg\r\n\r\n`),
+    audioBuffer,
+    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3-turbo\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\ntr\r\n`),
+    Buffer.from(`--${boundary}--\r\n`),
+  ]);
+
+  return new Promise((resolve, reject) => {
+    const req = require('https').request({
+      hostname: 'api.groq.com',
+      path: '/openai/v1/audio/transcriptions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_KEY}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString());
+          resolve(data.text || null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // ─── Claude: image → tasks ────────────────────────────────────────────────────
 function downloadPhoto(fileId) {
   return bot.getFileLink(fileId).then(url => new Promise((resolve, reject) => {
@@ -798,10 +852,26 @@ bot.on('photo', async msg => {
   await handlePhoto(msg);
 });
 
+// ─── Voice handler ────────────────────────────────────────────────────────────
+bot.on('voice', async msg => {
+  if (String(msg.chat.id) !== String(CHAT_ID)) return;
+  send('🎙️ Ses mesajı alındı, çevriliyor...');
+  const text = await transcribeVoice(msg.voice.file_id);
+  if (!text) {
+    send('⚠️ Ses mesajı çevrilemedi. GROQ_API_KEY ayarlı mı?');
+    return;
+  }
+  send(`📝 Anladım: "${text}"`);
+  lastMessageAt   = Date.now();
+  inactivityFired = false;
+  await runAgent(text);
+});
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 bot.on('message', async msg => {
   if (String(msg.chat.id) !== String(CHAT_ID)) return;
   if (msg.photo) return;
+  if (msg.voice) return;
 
   const text = (msg.text || '').trim();
   if (!text) return;

@@ -205,7 +205,7 @@ function buildAgentSystem() {
     : 'Görev yok.';
   const pending  = pendingTasks().length;
 
-  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki ve proaktifsin.
+  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki, proaktif ve çok yeteneklisin.
 
 ## Şu Anki Durum
 Saat: ${current}
@@ -220,7 +220,7 @@ ${taskList}`;
     sys += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
   }
   if (mem.rules.length) {
-    sys += `\n\n## Alışkanlıklar / Kurallar\n${mem.rules.join('\n')}`;
+    sys += `\n\n## ${USER_NAME} Hakkında Öğrendiklerin\n${mem.rules.join('\n')}`;
   }
   if (routines.length) {
     sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
@@ -228,14 +228,30 @@ ${taskList}`;
     ).join('\n');
   }
 
-  sys += `\n\n## Davranış Kuralları
+  sys += `\n\n## Yapabileceklerin (bunları kullanıcı istemese bile proaktif öner)
+1. 🧠 Mesaj Yönetimi — yazdığı mesajları düzenler, kısaltır, profesyonelleştirir, cevap hazırlar
+2. 📅 Planlama & Takvim — günlük/haftalık plan oluşturur, hatırlatmalar kurar
+3. 🔔 Hatırlatma Sistemi — belirtilen zamanlarda görevleri hatırlatır
+4. 📂 Not & Bilgi Düzenleme — karışık notları düzenler, özetler, anlaşılır hale getirir
+5. 🔎 Hızlı Araştırma — basit konularda araştırma yapar, kısa net bilgi sunar
+6. 🧾 Metin Üretimi — caption, açıklama, başlık, kısa yazılar üretir
+7. 🌍 Çeviri — Türkçe, İngilizce ve diğer diller arasında çeviri yapar
+8. 🔄 Tekrar Eden İşleri Kolaylaştırma — sık yapılan işleri otomatikleştirir, template oluşturur
+9. 📊 Özetleme — uzun metinleri ve konuşmaları kısa özetler
+10. 🗂 Organizasyon — günlük işleri düzenler, öncelik sıralaması yapar
+11. ⚙️ Süreç Takibi — yapılması gereken işleri takip eder, eksikleri hatırlatır
+12. 🧠 Karar Destek — seçenekleri analiz eder, artı-eksi listesi çıkarır
+13. 🔑 Proaktif Hatırlatma — kullanıcı söylemese bile eksik/unutulan işleri fark edip hatırlatır
+
+## Davranış Kuralları
 - Araçları kullanarak görevleri gerçek olarak yönet, sadece söz verme
 - Türkçe konuş, doğal ve samimi ol
-- Konuşma geçmişini hatırla ve bağlamı kullan
-- Proaktif ol: günün durumuna göre öneriler sun
+- Konuşma geçmişini ve ${USER_NAME} hakkında öğrendiklerini her zaman hatırla
+- Proaktif ol: günün durumuna göre öneriler sun, eksik gördüğün şeyleri belirt
 - Görevi silmeden önce onay iste (delete_tasks confirmed:false ile)
 - Bir görevi birden fazla şekilde tanımla: saat, numara veya anahtar kelime
-- ${USER_NAME}'e saygılı ve motive edici ol`;
+- ${USER_NAME}'e saygılı ve motive edici ol
+- Onboarding sırasında öğrenilen bilgileri save_memory ile kaydet`;
 
   return sys;
 }
@@ -319,13 +335,13 @@ const AGENT_TOOLS = [
   },
   {
     name: 'save_memory',
-    description: 'Kullanıcı hakkında bir şeyi öğren ve hafızaya kaydet (haftalık program, alışkanlık, kural).',
+    description: 'Kullanıcı hakkında öğrenilen her şeyi hafızaya kaydet: meslek, çalışma saatleri, alışkanlıklar, tercihler, haftalık program, kişisel kurallar. Onboarding cevaplarını mutlaka kaydet.',
     input_schema: {
       type: 'object',
       properties: {
-        type:  { type: 'string', enum: ['weekly_schedule', 'rule'], description: 'Hafıza türü' },
+        type:  { type: 'string', enum: ['weekly_schedule', 'rule'], description: 'Hafıza türü — kişisel bilgi/tercih/alışkanlık için "rule" kullan' },
         day:   { type: 'string', description: 'Gün (sadece weekly_schedule için): pazar|pazartesi|salı|çarşamba|perşembe|cuma|cumartesi' },
-        value: { type: 'string', description: 'Kaydedilecek bilgi' },
+        value: { type: 'string', description: 'Kaydedilecek bilgi — açıklayıcı ve net yaz' },
       },
       required: ['type', 'value'],
     },
@@ -1129,10 +1145,32 @@ console.log('[SYS] Sistem başlatılıyor...');
     }
   }
 
-  const pendingCount = tasks.filter(t => t.status === 'pending').length;
-  const doneCount    = tasks.filter(t => t.status === 'done').length;
-  const startupMsg = tasks.length
-    ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
-    : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊\n\nGörev eklemek için: "14:00 toplantı"\nGünlük plan için gününüzü anlatın, ben düzenlerim!`;
-  send(startupMsg);
+  const mem        = loadMemory();
+  const isFirstRun = conversationHistory.length === 0 && !mem.onboarding_done && mem.rules.length === 0;
+
+  if (isFirstRun) {
+    const onboardingMsg =
+`Merhaba! 👋 Ben ${ASSISTANT_NAME}, sizin kişisel asistanınızım.
+
+Sizi daha iyi tanımak ve en iyi şekilde yardımcı olmak için birkaç şey sormak istiyorum:
+
+1️⃣ Ne iş yapıyorsunuz? (sektör, rol, günlük iş akışı)
+2️⃣ Genellikle kaçta işe başlayıp kaçta bitiriyorsunuz?
+3️⃣ En çok hangi konularda yardıma ihtiyaç duyuyorsunuz? (planlama, mesaj yazma, hatırlatma, araştırma...)
+4️⃣ Haftalık düzenli programınız var mı? (toplantılar, spor, ders gibi)
+5️⃣ Benden ne bekliyorsunuz — nasıl bir asistan olayım?
+
+Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
+    send(onboardingMsg);
+    // Mark onboarding as started so we don't repeat on next restart
+    mem.onboarding_done = true;
+    saveMemory(mem);
+  } else {
+    const pendingCount = tasks.filter(t => t.status === 'pending').length;
+    const doneCount    = tasks.filter(t => t.status === 'done').length;
+    const startupMsg = tasks.length
+      ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
+      : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊`;
+    send(startupMsg);
+  }
 })();

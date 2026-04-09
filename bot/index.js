@@ -227,6 +227,9 @@ ${taskList}`;
       `- ${r.time ? `${r.time} — ` : ''}${r.text}`
     ).join('\n');
   }
+  if (mem.calendar_today && mem.calendar_today.length) {
+    sys += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
+  }
 
   sys += `\n\n## Yapabileceklerin (bunları kullanıcı istemese bile proaktif öner)
 1. 🧠 Mesaj Yönetimi — yazdığı mesajları düzenler, kısaltır, profesyonelleştirir, cevap hazırlar
@@ -367,6 +370,17 @@ const AGENT_TOOLS = [
     name: 'get_routines',
     description: 'Kayıtlı günlük rutinleri listele. Kullanıcı rutinlerini sormak veya görmek istediğinde kullan.',
     input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_calendar_events',
+    description: 'Google Takvim etkinliklerini getir. Kullanıcı takviminden etkinlik sormak veya günün planını görmek istediğinde kullan.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'YYYY-MM-DD formatında tarih. Boş bırakılırsa bugün.' },
+      },
+      required: [],
+    },
   },
   {
     name: 'set_schedule',
@@ -789,6 +803,16 @@ async function executeTool(name, input) {
       ).join('\n');
     }
 
+    case 'get_calendar_events': {
+      if (!dbAdapter) return '❌ DB bağlantısı yok.';
+      const calDate = input.date || new Date().toISOString().split('T')[0];
+      const events = await dbAdapter.getCalendarEvents(calDate);
+      if (!Array.isArray(events) || events.length === 0) return `📅 ${calDate} tarihinde Google Takvim'de etkinlik yok.`;
+      return `📅 Google Takvim (${calDate}):\n` + events.map(e =>
+        `• ${e.allDay ? 'Tüm gün' : e.start} — ${e.title}${e.location ? ` 📍 ${e.location}` : ''}`
+      ).join('\n');
+    }
+
     case 'set_schedule': {
       const s = { time: input.time, action: input.action, description: input.description };
       saveSchedule(s);
@@ -1142,6 +1166,19 @@ console.log('[SYS] Sistem başlatılıyor...');
       }
     } catch (e) {
       console.warn('[SYS] Rutinler yüklenemedi:', e.message);
+    }
+
+    // Load today's Google Calendar events into memory for context
+    try {
+      const calEvents = await dbAdapter.getCalendarEvents();
+      if (Array.isArray(calEvents) && calEvents.length) {
+        const mem = loadMemory();
+        mem.calendar_today = calEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
+        saveMemory(mem);
+        console.log(`[SYS] ${calEvents.length} Google Takvim etkinliği yüklendi.`);
+      }
+    } catch (e) {
+      console.warn('[SYS] Google Takvim yüklenemedi:', e.message);
     }
   }
 

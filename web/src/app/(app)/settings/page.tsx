@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import useSWR from 'swr'
-import { Key, Bell, Calendar, User, Trash2, Eye, EyeOff, Save, Loader2, CheckCircle2, Bot, Play, Square, RefreshCw } from 'lucide-react'
+import { Key, Bell, Calendar, User, Trash2, Eye, EyeOff, Save, Loader2, CheckCircle2, Bot, Play, Square, RefreshCw, Link2, Link2Off } from 'lucide-react'
 import type { UserSettings } from '@/types'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -93,6 +93,88 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         }`}
       />
     </button>
+  )
+}
+
+function GoogleCalendarSection() {
+  const { data, mutate } = useSWR<{ connected: boolean; email?: string }>(
+    '/api/calendar/status',
+    fetcher
+  )
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  async function disconnect() {
+    setDisconnecting(true)
+    await fetch('/api/calendar/events', { method: 'DELETE' })
+    mutate()
+    setDisconnecting(false)
+  }
+
+  const connected = data?.connected ?? false
+
+  return (
+    <div
+      className="rounded-2xl p-6"
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+      }}
+    >
+      <h2 className="text-white font-semibold text-sm mb-5 flex items-center gap-2">
+        <Calendar size={15} className="text-zinc-400" />
+        Google Takvim
+      </h2>
+
+      <div className="flex items-center justify-between">
+        <div>
+          {connected ? (
+            <>
+              <p className="text-white text-sm flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="text-green-400" />
+                Bağlandı
+              </p>
+              {data?.email && (
+                <p className="text-zinc-500 text-xs mt-0.5">{data.email}</p>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="text-white text-sm">Bağlı değil</p>
+              <p className="text-zinc-500 text-xs mt-0.5">Google hesabınızdaki etkinlikleri asistana gösterin</p>
+            </>
+          )}
+        </div>
+
+        {connected ? (
+          <button
+            onClick={disconnect}
+            disabled={disconnecting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={{
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.2)',
+              color: '#f87171',
+            }}
+          >
+            {disconnecting ? <Loader2 size={12} className="animate-spin" /> : <><Link2Off size={12} /> Bağlantıyı Kes</>}
+          </button>
+        ) : (
+          <a
+            href="/api/calendar/auth"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={{
+              background: 'rgba(66,133,244,0.12)',
+              border: '1px solid rgba(66,133,244,0.25)',
+              color: '#60a5fa',
+            }}
+          >
+            <Link2 size={12} />
+            Google ile Bağla
+          </a>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -452,6 +534,9 @@ export default function SettingsPage() {
             </>
           )}
         </button>
+
+        {/* Google Calendar */}
+        <GoogleCalendarSection />
 
         {/* Telegram Bot */}
         <BotControl />

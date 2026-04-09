@@ -8,7 +8,13 @@
       "Bash(DATABASE_URL=\"file:../organic_assistant.db\" npx prisma migrate dev --name init)",
       "Bash(npx tsc:*)",
       "Bash(npm run:*)",
-      "Bash(cat node_modules/next/dist/docs/01-app/02-guides/*.md)"
+      "Bash(cat node_modules/next/dist/docs/01-app/02-guides/*.md)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Read(//Users/alperenkocaman/jarvis/**)",
+      "Bash(openssl req:*)",
+      "Bash(npx prisma:*)"
     ]
   }
 }

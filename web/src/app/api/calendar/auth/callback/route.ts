@@ -17,7 +17,9 @@ export async function GET(req: NextRequest) {
 
   // Get user's Google email
   const oauth2 = google.oauth2({ version: 'v2', auth: client })
-  const info = await oauth2.userinfo.get().catch(() => ({ data: {} }))
+  const googleEmail = await oauth2.userinfo.get()
+    .then(r => r.data.email ?? null)
+    .catch(() => null)
 
   await prisma.googleCalendarToken.upsert({
     where:  { userId: session.user.id },
@@ -26,13 +28,13 @@ export async function GET(req: NextRequest) {
       accessToken:  tokens.access_token!,
       refreshToken: tokens.refresh_token ?? null,
       tokenExpiry:  tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-      email:        info.data.email ?? null,
+      email:        googleEmail,
     },
     update: {
       accessToken:  tokens.access_token!,
       refreshToken: tokens.refresh_token ?? null,
       tokenExpiry:  tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-      email:        info.data.email ?? null,
+      email:        googleEmail,
     },
   })
 

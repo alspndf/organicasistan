@@ -56,7 +56,8 @@ const DAY_KEYS    = ['pazar','pazartesi','salı','çarşamba','perşembe','cuma'
 const DAY_LABELS  = { 0:'Pazar',1:'Pazartesi',2:'Salı',3:'Çarşamba',4:'Perşembe',5:'Cuma',6:'Cumartesi' };
 
 // ─── Memory ───────────────────────────────────────────────────────────────────
-const MEMORY_FILE = path.join(__dirname, 'memory.json');
+const _USER_ID_SLUG = (process.env.WEB_USER_ID || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+const MEMORY_FILE = path.join(__dirname, `memory_${_USER_ID_SLUG}.json`);
 
 function loadMemory() {
   try {

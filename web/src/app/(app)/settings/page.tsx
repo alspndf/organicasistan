@@ -233,6 +233,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [deletingTasks, setDeletingTasks] = useState(false)
+  const [resettingAll, setResettingAll] = useState(false)
 
   useEffect(() => {
     if (settings) {
@@ -279,6 +280,18 @@ export default function SettingsPage() {
       console.error(err)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleResetAll() {
+    if (!confirm('Tüm görevler, rutinler ve hafıza silinecek. Bu işlem geri alınamaz. Emin misiniz?')) return
+    setResettingAll(true)
+    try {
+      await fetch('/api/reset', { method: 'DELETE' })
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setResettingAll(false)
     }
   }
 
@@ -455,26 +468,42 @@ export default function SettingsPage() {
             <Trash2 size={15} />
             Tehlikeli Bölge
           </h2>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-white text-sm">Bugünün Görevlerini Sil</p>
-              <p className="text-zinc-500 text-xs mt-0.5">Bu işlem geri alınamaz</p>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-white text-sm">Bugünün Görevlerini Sil</p>
+                <p className="text-zinc-500 text-xs mt-0.5">Yalnızca bugünkü görevler silinir</p>
+              </div>
+              <button
+                onClick={handleDeleteTodayTasks}
+                disabled={deletingTasks}
+                className="px-4 py-2 rounded-xl text-red-400 text-sm font-medium transition-all disabled:opacity-50"
+                style={{
+                  background: 'rgba(239,68,68,0.1)',
+                  border: '1px solid rgba(239,68,68,0.2)',
+                }}
+              >
+                {deletingTasks ? <Loader2 size={14} className="animate-spin" /> : 'Bugünü Temizle'}
+              </button>
             </div>
-            <button
-              onClick={handleDeleteTodayTasks}
-              disabled={deletingTasks}
-              className="px-4 py-2 rounded-xl text-red-400 text-sm font-medium transition-all disabled:opacity-50"
-              style={{
-                background: 'rgba(239,68,68,0.1)',
-                border: '1px solid rgba(239,68,68,0.2)',
-              }}
-            >
-              {deletingTasks ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                'Bugünü Temizle'
-              )}
-            </button>
+            <div className="h-px" style={{ background: 'rgba(239,68,68,0.15)' }} />
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-white text-sm">Tüm Verileri Sıfırla</p>
+                <p className="text-zinc-500 text-xs mt-0.5">Tüm görevler, rutinler ve hafıza silinir</p>
+              </div>
+              <button
+                onClick={handleResetAll}
+                disabled={resettingAll}
+                className="px-4 py-2 rounded-xl text-red-400 text-sm font-medium transition-all disabled:opacity-50"
+                style={{
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(239,68,68,0.3)',
+                }}
+              >
+                {resettingAll ? <Loader2 size={14} className="animate-spin" /> : 'Sıfırla'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

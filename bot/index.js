@@ -336,7 +336,7 @@ const AGENT_TOOLS = [
   },
   {
     name: 'save_routine',
-    description: 'Günlük rutin veya alışkanlık kaydet. "Her gün sabah X\'te Y yap", "hergün yapılacaklar" gibi taleplerde kullan. Web uygulamasına kaydeder, kalıcıdır.',
+    description: 'Günlük rutin veya alışkanlık kaydet. "Her gün sabah X\'te Y yap", "hergün yapılacaklar" gibi taleplerde kullan. Web uygulamasına kaydeder, kalıcıdır. [Otomatik rutin tetiklendi] prefix\'li mesajlarda KULLANMA — o durumda eylemi direkt gerçekleştir.',
     input_schema: {
       type: 'object',
       properties: {
@@ -461,7 +461,8 @@ function registerSchedule(s) {
     console.log(`[CRON] Zamanlama tetiklendi: ${s.description}`);
     if (s.action === 'daily_analysis') runDailyAnalysis();
     else if (s.action === 'routine' && s.text) {
-      runAgent(s.text).catch(e => console.error('[CRON] Rutin hatası:', e.message));
+      const trigger = `[Otomatik rutin tetiklendi — yeni kayıt oluşturma, sadece şimdi yap]: ${s.text}`;
+      runAgent(trigger).catch(e => console.error('[CRON] Rutin hatası:', e.message));
     }
   }, { timezone: 'Europe/Istanbul' });
 

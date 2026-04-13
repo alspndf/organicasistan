@@ -1,4 +1,5 @@
 import { google } from 'googleapis'
+import { prisma } from './prisma'
 
 export function getOAuth2Client() {
   return new google.auth.OAuth2(
@@ -13,13 +14,34 @@ export function getAuthUrl() {
   return client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: ['https://www.googleapis.com/auth/calendar.readonly'],
+    scope: [
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ],
   })
 }
 
-export async function getCalendarEvents(accessToken: string, refreshToken: string | null, date: string) {
+export async function getCalendarEvents(userId: string, date: string) {
+  const token = await prisma.googleCalendarToken.findUnique({ where: { userId } })
+  if (!token) return []
+
   const client = getOAuth2Client()
-  client.setCredentials({ access_token: accessToken, refresh_token: refreshToken ?? undefined })
+  client.setCredentials({
+    access_token:  token.accessToken,
+    refresh_token: token.refreshToken ?? undefined,
+  })
+
+  // Auto-refresh token if expired
+  client.on('tokens', async (newTokens) => {
+    await prisma.googleCalendarToken.update({
+      where: { userId },
+      data: {
+        accessToken: newTokens.access_token ?? token.accessToken,
+        ...(newTokens.refresh_token ? { refreshToken: newTokens.refresh_token } : {}),
+        ...(newTokens.expiry_date   ? { tokenExpiry: new Date(newTokens.expiry_date) } : {}),
+      },
+    })
+  })
 
   const calendar = google.calendar({ version: 'v3', auth: client })
 
@@ -38,8 +60,12 @@ export async function getCalendarEvents(accessToken: string, refreshToken: strin
   return (res.data.items || []).map(e => ({
     id:       e.id,
     title:    e.summary || '(başlıksız)',
-    start:    e.start?.dateTime ? new Date(e.start.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' }) : 'Tüm gün',
-    end:      e.end?.dateTime   ? new Date(e.end.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' }) : '',
+    start:    e.start?.dateTime
+      ? new Date(e.start.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' })
+      : 'Tüm gün',
+    end:      e.end?.dateTime
+      ? new Date(e.end.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' })
+      : '',
     location: e.location || null,
     allDay:   !e.start?.dateTime,
   }))

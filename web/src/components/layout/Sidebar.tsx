@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Repeat2,
+  CalendarCheck,
 } from 'lucide-react'
 
 interface SidebarProps {
@@ -24,6 +25,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/tasks', icon: CalendarDays, label: 'Takvim' },
+  { href: '/google-calendar', icon: CalendarCheck, label: 'Google Takvim' },
   { href: '/routines', icon: Repeat2, label: 'Günlük Rutinler' },
   { href: '/schedule', icon: Calendar, label: 'Haftalık Plan' },
   { href: '/chat', icon: MessageSquare, label: 'Sohbet' },

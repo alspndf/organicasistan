@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
 
   try {
-    const events = await getCalendarEvents(token.accessToken, token.refreshToken, date)
+    const events = await getCalendarEvents(session.user.id, date)
     return NextResponse.json(events)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'unknown'

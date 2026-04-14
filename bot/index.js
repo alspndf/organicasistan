@@ -71,9 +71,15 @@ function saveMemory(mem) {
   try { fs.writeFileSync(MEMORY_FILE, JSON.stringify(mem, null, 2)); } catch { /* ignore */ }
 }
 
+function todayDayIndex() {
+  // Returns 0=Pazar..6=Cumartesi in Istanbul timezone
+  const iso = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' }); // YYYY-MM-DD
+  return new Date(iso + 'T12:00:00').getDay();
+}
+
 function todayKey() {
   const day = new Date().toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul', weekday: 'long' }).toLowerCase();
-  return DAY_KEYS.find(k => day.startsWith(k)) || DAY_KEYS[new Date().getDay()];
+  return DAY_KEYS.find(k => day.startsWith(k)) || DAY_KEYS[todayDayIndex()];
 }
 
 function saveWeeklyActivity(day, activity) {
@@ -197,7 +203,7 @@ function scheduleSaveHistory() {
 
 function buildAgentSystem() {
   const current  = nowHH();
-  const dayName  = DAY_LABELS[new Date().getDay()] || '';
+  const dayName  = DAY_LABELS[todayDayIndex()] || '';
   const mem      = loadMemory();
   const dayItems = mem.weekly_schedule[todayKey()] || [];
   const taskList = tasks.length
@@ -205,11 +211,13 @@ function buildAgentSystem() {
     : 'Görev yok.';
   const pending  = pendingTasks().length;
 
+  const todayDate = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+
   let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki, proaktif ve çok yeteneklisin.
 
 ## Şu Anki Durum
+Tarih: ${todayDate} (${dayName})
 Saat: ${current}
-Gün: ${dayName}
 Bekleyen görev: ${pending}/${MAX_TASKS}
 ${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
 
@@ -414,7 +422,7 @@ SADECE JSON döndür: [{"time":"HH:MM","title":"görev başlığı"}]`;
 async function generateDailyPlan(userText) {
   const current    = nowHH();
   const mem        = loadMemory();
-  const dayName    = DAY_LABELS[new Date().getDay()] || '';
+  const dayName    = DAY_LABELS[todayDayIndex()] || '';
   const dayItems   = mem.weekly_schedule[todayKey()] || [];
   const existTimes = pendingTasks().map(t => t.time);
 
@@ -1062,7 +1070,7 @@ process.on('uncaughtException', (err) => {
 
 // ─── Cron: 09:00 — daily plan ─────────────────────────────────────────────────
 cron.schedule('0 9 * * *', () => {
-  const dayName  = DAY_LABELS[new Date().getDay()] || '';
+  const dayName  = DAY_LABELS[todayDayIndex()] || '';
   const mem      = loadMemory();
   const dayItems = mem.weekly_schedule[todayKey()] || [];
   const pending  = pendingTasks();

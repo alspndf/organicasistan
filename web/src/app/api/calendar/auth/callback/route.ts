@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { getOAuth2Client } from '@/lib/google-calendar'
 import { prisma } from '@/lib/prisma'
 import { google } from 'googleapis'
 
@@ -11,11 +10,18 @@ export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code')
   if (!code) return NextResponse.redirect(new URL('/settings?calendar=error', req.url))
 
-  const client = getOAuth2Client()
+  const base = `${req.nextUrl.protocol}//${req.nextUrl.host}`
+  const redirectUri = `${base}/api/calendar/auth/callback`
+
+  const client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri
+  )
+
   const { tokens } = await client.getToken(code)
   client.setCredentials(tokens)
 
-  // Get user's Google email
   const oauth2 = google.oauth2({ version: 'v2', auth: client })
   const googleEmail = await oauth2.userinfo.get()
     .then(r => r.data.email ?? null)

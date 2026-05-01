@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { Key, Bell, Calendar, User, Trash2, Eye, EyeOff, Save, Loader2, CheckCircle2, Bot, Play, Square, RefreshCw, Link2, Link2Off } from 'lucide-react'
 import type { UserSettings } from '@/types'
@@ -97,16 +98,21 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 }
 
 function GoogleCalendarSection() {
+  const searchParams   = useSearchParams()
+  const calendarParam  = searchParams.get('calendar')
+  const calendarReason = searchParams.get('reason')
+
   const { data, mutate } = useSWR<{ connected: boolean; email?: string }>(
     '/api/calendar/status',
-    fetcher
+    fetcher,
+    { revalidateOnMount: true, revalidateOnFocus: true }
   )
   const [disconnecting, setDisconnecting] = useState(false)
 
-  // Read ?calendar= query param to show result
-  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
-  const calendarParam  = params?.get('calendar')
-  const calendarReason = params?.get('reason')
+  // Force revalidate when redirected back with ?calendar=connected
+  useEffect(() => {
+    if (calendarParam === 'connected') mutate()
+  }, [calendarParam, mutate])
 
   async function disconnect() {
     setDisconnecting(true)
@@ -552,7 +558,9 @@ export default function SettingsPage() {
         </button>
 
         {/* Google Calendar */}
-        <GoogleCalendarSection />
+        <Suspense fallback={null}>
+          <GoogleCalendarSection />
+        </Suspense>
 
         {/* Telegram Bot */}
         <BotControl />

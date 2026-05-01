@@ -2,21 +2,22 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { google } from 'googleapis'
+import { getBaseUrl } from '@/lib/get-base-url'
 
 export async function GET(req: NextRequest) {
-  const base = `${req.nextUrl.protocol}//${req.nextUrl.host}`
+  const base = getBaseUrl(req)
 
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.redirect(new URL('/login', req.url))
+      return NextResponse.redirect(`${base}/login`)
     }
 
-    const code = req.nextUrl.searchParams.get('code')
+    const code  = req.nextUrl.searchParams.get('code')
     const error = req.nextUrl.searchParams.get('error')
 
     if (error || !code) {
-      return NextResponse.redirect(new URL(`/settings?calendar=error&reason=${error || 'no_code'}`, req.url))
+      return NextResponse.redirect(`${base}/settings?calendar=error&reason=${error || 'no_code'}`)
     }
 
     const redirectUri = `${base}/api/calendar/auth/callback`
@@ -52,11 +53,11 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    return NextResponse.redirect(new URL('/settings?calendar=connected', req.url))
+    return NextResponse.redirect(`${base}/settings?calendar=connected`)
 
   } catch (e: unknown) {
     const msg = encodeURIComponent(e instanceof Error ? e.message : 'unknown_error')
     console.error('[Calendar OAuth] callback error:', e)
-    return NextResponse.redirect(new URL(`/settings?calendar=error&reason=${msg}`, req.url))
+    return NextResponse.redirect(`${base}/settings?calendar=error&reason=${msg}`)
   }
 }

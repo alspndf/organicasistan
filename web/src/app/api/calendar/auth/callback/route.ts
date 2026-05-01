@@ -1,26 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { google } from 'googleapis'
 import { getBaseUrl } from '@/lib/get-base-url'
 
 export async function GET(req: NextRequest) {
-  const base = getBaseUrl(req)
+  const base  = getBaseUrl(req)
+  const error = req.nextUrl.searchParams.get('error')
+  const code  = req.nextUrl.searchParams.get('code')
+  const state = req.nextUrl.searchParams.get('state')
+
+  if (error || !code || !state) {
+    return NextResponse.redirect(`${base}/settings?calendar=error&reason=${error || 'missing_params'}`)
+  }
 
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.redirect(`${base}/login`)
+    // Decode userId from state — no session cookie needed
+    const { userId, base: stateBase } = JSON.parse(Buffer.from(state, 'base64').toString())
+    const redirectBase = stateBase || base
+
+    if (!userId) {
+      return NextResponse.redirect(`${redirectBase}/settings?calendar=error&reason=no_user_in_state`)
     }
 
-    const code  = req.nextUrl.searchParams.get('code')
-    const error = req.nextUrl.searchParams.get('error')
-
-    if (error || !code) {
-      return NextResponse.redirect(`${base}/settings?calendar=error&reason=${error || 'no_code'}`)
-    }
-
-    const redirectUri = `${base}/api/calendar/auth/callback`
+    const redirectUri = `${redirectBase}/api/calendar/auth/callback`
 
     const client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -37,9 +39,9 @@ export async function GET(req: NextRequest) {
       .catch(() => null)
 
     await prisma.googleCalendarToken.upsert({
-      where:  { userId: session.user.id },
+      where:  { userId },
       create: {
-        userId:       session.user.id,
+        userId,
         accessToken:  tokens.access_token!,
         refreshToken: tokens.refresh_token ?? null,
         tokenExpiry:  tokens.expiry_date ? new Date(tokens.expiry_date) : null,
@@ -53,7 +55,7 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    return NextResponse.redirect(`${base}/settings?calendar=connected`)
+    return NextResponse.redirect(`${redirectBase}/settings?calendar=connected`)
 
   } catch (e: unknown) {
     const msg = encodeURIComponent(e instanceof Error ? e.message : 'unknown_error')

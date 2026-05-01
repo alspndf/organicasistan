@@ -103,6 +103,11 @@ function GoogleCalendarSection() {
   )
   const [disconnecting, setDisconnecting] = useState(false)
 
+  // Read ?calendar= query param to show result
+  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+  const calendarParam  = params?.get('calendar')
+  const calendarReason = params?.get('reason')
+
   async function disconnect() {
     setDisconnecting(true)
     await fetch('/api/calendar/events', { method: 'DELETE' })
@@ -125,6 +130,17 @@ function GoogleCalendarSection() {
         <Calendar size={15} className="text-zinc-400" />
         Google Takvim
       </h2>
+
+      {calendarParam === 'connected' && (
+        <p className="text-green-400 text-xs mb-3 px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: 'rgba(34,197,94,0.08)' }}>
+          <CheckCircle2 size={12} /> Başarıyla bağlandı!
+        </p>
+      )}
+      {calendarParam === 'error' && (
+        <p className="text-red-400 text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.08)' }}>
+          Bağlantı hatası{calendarReason ? `: ${decodeURIComponent(calendarReason)}` : ''}
+        </p>
+      )}
 
       <div className="flex items-center justify-between">
         <div>

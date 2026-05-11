@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
       WEB_USER_ID:        session.user.id as string,
       BOT_USER_NAME:      settings?.userName || user?.name || 'Kullanıcı',
       BOT_ASSISTANT_NAME: settings?.assistantName || 'Yeliz',
+      BOT_TIMEZONE:       settings?.timezone || 'Europe/Istanbul',
     }
 
     // Telegram token: settings first, then .env fallback

@@ -25,7 +25,8 @@ const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
 const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
-const MODEL          = 'claude-sonnet-4-6';   // 5x cheaper than opus, same quality for assistant tasks
+const TZ             = process.env.BOT_TIMEZONE        || 'Europe/Istanbul';
+const MODEL          = 'claude-sonnet-4-6';
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
   console.error('❌  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID ve ANTHROPIC_API_KEY gerekli.');
@@ -73,12 +74,12 @@ function saveMemory(mem) {
 
 function todayDayIndex() {
   // Returns 0=Pazar..6=Cumartesi in Istanbul timezone
-  const iso = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' }); // YYYY-MM-DD
+  const iso = new Date().toLocaleDateString('sv-SE', { timeZone: TZ }); // YYYY-MM-DD
   return new Date(iso + 'T12:00:00').getDay();
 }
 
 function todayKey() {
-  const day = new Date().toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul', weekday: 'long' }).toLowerCase();
+  const day = new Date().toLocaleDateString('tr-TR', { timeZone: TZ, weekday: 'long' }).toLowerCase();
   return DAY_KEYS.find(k => day.startsWith(k)) || DAY_KEYS[todayDayIndex()];
 }
 
@@ -113,7 +114,7 @@ function loadSchedules() {
 
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
-const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
+const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
 
 function parseTime(raw) {
   if (!raw) return null;
@@ -249,7 +250,7 @@ function buildStaticSystem() {
 function buildDynamicContext() {
   const current   = nowHH();
   const dayName   = DAY_LABELS[todayDayIndex()] || '';
-  const todayDate = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+  const todayDate = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
   const mem       = loadMemory();
   const dayItems  = mem.weekly_schedule[todayKey()] || [];
   const taskList  = tasks.length
@@ -516,7 +517,7 @@ function registerSchedule(s) {
       const trigger = `[Otomatik rutin tetiklendi — yeni kayıt oluşturma, sadece şimdi yap]: ${s.text}`;
       runAgent(trigger).catch(e => console.error('[CRON] Rutin hatası:', e.message));
     }
-  }, { timezone: 'Europe/Istanbul' });
+  }, { timezone: TZ });
 
   console.log(`[CRON] Zamanlama kaydedildi: ${s.description} (${cronExpr})`);
 }
@@ -689,7 +690,7 @@ async function executeTool(name, input) {
 
       // Future date: save to DB only, not in-memory
       if (input.date) {
-        const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+        const today = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
         if (input.date > today) {
           const futureTask = { id: `t${idCounter++}`, title: input.title, time: t, status: 'pending' };
           dbAdapter?.syncTask(futureTask, input.date);
@@ -826,7 +827,7 @@ async function executeTool(name, input) {
 
     case 'get_current_time': {
       const t = nowHH();
-      const d = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+      const d = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
       const day = DAY_LABELS[todayDayIndex()] || '';
       return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — İstanbul saati`;
     }
@@ -1110,7 +1111,7 @@ cron.schedule('0 9 * * *', () => {
   }
   send(lines.join('\n'));
   console.log('[CRON] 09:00 plan gönderildi.');
-}, { timezone: 'Europe/Istanbul' });
+}, { timezone: TZ });
 
 // ─── Cron: 11:00 — email summary ─────────────────────────────────────────────
 cron.schedule('0 11 * * *', () => {
@@ -1124,7 +1125,7 @@ cron.schedule('0 11 * * *', () => {
     'Göreve dönüştürmek için:\n"15:00 e-posta yanıtları"'
   );
   console.log('[CRON] 11:00 e-posta özeti gönderildi.');
-}, { timezone: 'Europe/Istanbul' });
+}, { timezone: TZ });
 
 // ─── Inactivity check (every 10 min, fires after 90 min silence) ─────────────
 const INACTIVITY_MS = 90 * 60 * 1000; // 90 minutes

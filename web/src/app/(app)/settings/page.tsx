@@ -333,6 +333,7 @@ export default function SettingsPage() {
   const [dailyPlanTime, setDailyPlanTime] = useState('09:00')
   const [assistantName, setAssistantName] = useState('Yeliz')
   const [userName, setUserName] = useState('Alp Bey')
+  const [timezone, setTimezone] = useState('Europe/Istanbul')
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -347,6 +348,7 @@ export default function SettingsPage() {
       setDailyPlanTime(settings.dailyPlanTime || '09:00')
       setAssistantName(settings.assistantName || 'Yeliz')
       setUserName(settings.userName || 'Alp Bey')
+      setTimezone(settings.timezone || 'Europe/Istanbul')
     }
   }, [settings])
 
@@ -362,6 +364,7 @@ export default function SettingsPage() {
         dailyPlanTime,
         assistantName,
         userName,
+        timezone,
       }
 
       if (anthropicKey) body.anthropicKey = anthropicKey
@@ -531,6 +534,31 @@ export default function SettingsPage() {
                 onChange={setUserName}
                 placeholder="Alp Bey"
               />
+            </Field>
+            <Field label="Saat Dilimi">
+              <select
+                value={timezone}
+                onChange={e => setTimezone(e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl text-white text-sm outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
+                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', colorScheme: 'dark' }}
+              >
+                {[
+                  ['Europe/Istanbul',    'Türkiye (UTC+3)'],
+                  ['Asia/Ho_Chi_Minh',   'Vietnam (UTC+7)'],
+                  ['Europe/London',      'Londra (UTC+0/+1)'],
+                  ['Europe/Berlin',      'Almanya (UTC+1/+2)'],
+                  ['America/New_York',   'New York (UTC-5/-4)'],
+                  ['America/Los_Angeles','Los Angeles (UTC-8/-7)'],
+                  ['Asia/Dubai',         'Dubai (UTC+4)'],
+                  ['Asia/Tokyo',         'Japonya (UTC+9)'],
+                  ['Asia/Singapore',     'Singapur (UTC+8)'],
+                  ['Asia/Bangkok',       'Tayland (UTC+7)'],
+                  ['Asia/Kolkata',       'Hindistan (UTC+5:30)'],
+                  ['Australia/Sydney',   'Avustralya/Sydney (UTC+10/+11)'],
+                ].map(([tz, label]) => (
+                  <option key={tz} value={tz}>{label}</option>
+                ))}
+              </select>
             </Field>
           </div>
         </Section>

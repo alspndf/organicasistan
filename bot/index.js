@@ -201,45 +201,13 @@ function scheduleSaveHistory() {
   }, 3000);
 }
 
-function buildAgentSystem() {
-  const current  = nowHH();
-  const dayName  = DAY_LABELS[todayDayIndex()] || '';
-  const mem      = loadMemory();
-  const dayItems = mem.weekly_schedule[todayKey()] || [];
-  const taskList = tasks.length
-    ? sortedTasks().map((t, i) => `${i + 1}. [${t.status}] ${t.time} — ${t.title}`).join('\n')
-    : 'Görev yok.';
-  const pending  = pendingTasks().length;
-
-  const todayDate = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+// Static part — cached (rarely changes)
+function buildStaticSystem() {
+  const mem = loadMemory();
 
   let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki, proaktif ve çok yeteneklisin.
 
-## Şu Anki Durum
-Tarih: ${todayDate} (${dayName})
-Saat: ${current}
-Bekleyen görev: ${pending}/${MAX_TASKS}
-${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
-
-## Bugünkü Görevler
-${taskList}`;
-
-  if (dayItems.length) {
-    sys += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
-  }
-  if (mem.rules.length) {
-    sys += `\n\n## ${USER_NAME} Hakkında Öğrendiklerin\n${mem.rules.join('\n')}`;
-  }
-  if (routines.length) {
-    sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
-      `- ${r.time ? `${r.time} — ` : ''}${r.text}`
-    ).join('\n');
-  }
-  if (mem.calendar_today && mem.calendar_today.length) {
-    sys += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
-  }
-
-  sys += `\n\n## Yapabileceklerin (bunları kullanıcı istemese bile proaktif öner)
+## Yapabileceklerin (kullanıcı istemese bile proaktif öner)
 1. 🧠 Mesaj Yönetimi — yazdığı mesajları düzenler, kısaltır, profesyonelleştirir, cevap hazırlar
 2. 📅 Planlama & Takvim — günlük/haftalık plan oluşturur, hatırlatmalar kurar
 3. 🔔 Hatırlatma Sistemi — belirtilen zamanlarda görevleri hatırlatır
@@ -257,6 +225,7 @@ ${taskList}`;
 ## Davranış Kuralları
 - Araçları kullanarak görevleri gerçek olarak yönet, sadece söz verme
 - Türkçe konuş, doğal ve samimi ol
+- Zaman hakkında konuşurken get_current_time aracını kullan — tahmin etme, ölç
 - Konuşma geçmişini ve ${USER_NAME} hakkında öğrendiklerini her zaman hatırla
 - Proaktif ol: günün durumuna göre öneriler sun, eksik gördüğün şeyleri belirt
 - Görevi silmeden önce onay iste (delete_tasks confirmed:false ile)
@@ -264,7 +233,46 @@ ${taskList}`;
 - ${USER_NAME}'e saygılı ve motive edici ol
 - Onboarding sırasında öğrenilen bilgileri save_memory ile kaydet`;
 
+  if (mem.rules.length) {
+    sys += `\n\n## ${USER_NAME} Hakkında Öğrendiklerin\n${mem.rules.join('\n')}`;
+  }
+  if (routines.length) {
+    sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
+      `- ${r.time ? `${r.time} — ` : ''}${r.text}`
+    ).join('\n');
+  }
+
   return sys;
+}
+
+// Dynamic part — NOT cached (changes every message)
+function buildDynamicContext() {
+  const current   = nowHH();
+  const dayName   = DAY_LABELS[todayDayIndex()] || '';
+  const todayDate = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+  const mem       = loadMemory();
+  const dayItems  = mem.weekly_schedule[todayKey()] || [];
+  const taskList  = tasks.length
+    ? sortedTasks().map((t, i) => `${i + 1}. [${t.status}] ${t.time} — ${t.title}`).join('\n')
+    : 'Görev yok.';
+  const pending = pendingTasks().length;
+
+  let ctx = `## Anlık Durum
+Tarih: ${todayDate} (${dayName}) | Saat: ${current} (İstanbul)
+Bekleyen görev: ${pending}
+${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
+
+## Bugünkü Görevler
+${taskList}`;
+
+  if (dayItems.length) {
+    ctx += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
+  }
+  if (mem.calendar_today && mem.calendar_today.length) {
+    ctx += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
+  }
+
+  return ctx;
 }
 
 const AGENT_TOOLS = [
@@ -377,6 +385,11 @@ const AGENT_TOOLS = [
   {
     name: 'get_routines',
     description: 'Kayıtlı günlük rutinleri listele. Kullanıcı rutinlerini sormak veya görmek istediğinde kullan.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_current_time',
+    description: 'Güncel İstanbul saatini ve tarihini al. Saat sorulduğunda veya zamana bağlı karar verirken kullan.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -811,6 +824,13 @@ async function executeTool(name, input) {
       ).join('\n');
     }
 
+    case 'get_current_time': {
+      const t = nowHH();
+      const d = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Istanbul' });
+      const day = DAY_LABELS[todayDayIndex()] || '';
+      return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — İstanbul saati`;
+    }
+
     case 'get_calendar_events': {
       if (!dbAdapter) return '❌ DB bağlantısı yok.';
       const calDate = input.date || new Date().toISOString().split('T')[0];
@@ -877,9 +897,13 @@ async function runAgent(userText) {
       response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 1024,
-        system: buildAgentSystem(),
+        system: [
+          { type: 'text', text: buildStaticSystem(), cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: buildDynamicContext() },
+        ],
         tools: AGENT_TOOLS,
         messages,
+        betas: ['prompt-caching-2024-07-31'],
       });
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);

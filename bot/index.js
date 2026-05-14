@@ -895,17 +895,19 @@ async function runAgent(userText) {
   for (let round = 0; round < 8; round++) {
     let response;
     try {
-      response = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 1024,
-        system: [
-          { type: 'text', text: buildStaticSystem(), cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: buildDynamicContext() },
-        ],
-        tools: AGENT_TOOLS,
-        messages,
-        betas: ['prompt-caching-2024-07-31'],
-      });
+      response = await anthropic.messages.create(
+        {
+          model: MODEL,
+          max_tokens: 1024,
+          system: [
+            { type: 'text', text: buildStaticSystem(), cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: buildDynamicContext() },
+          ],
+          tools: AGENT_TOOLS,
+          messages,
+        },
+        { headers: { 'anthropic-beta': 'prompt-caching-2024-07-31' } }
+      );
     } catch (e) {
       console.error('[AGENT] Claude hatası:', e.message);
       send(`Üzgünüm ${USER_NAME}, bir hata oluştu. Tekrar dener misiniz? 🙏`);

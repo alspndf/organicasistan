@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(events)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'unknown'
+    console.error('[bot/calendar] error:', e)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

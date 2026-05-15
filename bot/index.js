@@ -834,8 +834,9 @@ async function executeTool(name, input) {
 
     case 'get_calendar_events': {
       if (!dbAdapter) return '❌ DB bağlantısı yok.';
-      const calDate = input.date || new Date().toISOString().split('T')[0];
+      const calDate = input.date || new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
       const events = await dbAdapter.getCalendarEvents(calDate);
+      if (events && events.error) return `❌ Google Takvim hatası: ${events.error}`;
       if (!Array.isArray(events) || events.length === 0) return `📅 ${calDate} tarihinde Google Takvim'de etkinlik yok.`;
       return `📅 Google Takvim (${calDate}):\n` + events.map(e =>
         `• ${e.allDay ? 'Tüm gün' : e.start} — ${e.title}${e.location ? ` 📍 ${e.location}` : ''}`

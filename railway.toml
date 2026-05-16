@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "cd web && npm install --legacy-peer-deps && npm run build"
+buildCommand = "cd web && npm install --legacy-peer-deps && npm run build && cd ../bot && npm install --legacy-peer-deps"
 
 [deploy]
 startCommand = "cd web && npm run start:prod"

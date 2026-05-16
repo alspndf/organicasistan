@@ -190,10 +190,15 @@ async function connectWA() {
       notifyWebStatus();
       console.log(`[WA] Bağlantı kapandı (kod: ${code}, loggedOut: ${loggedOut})`);
 
-      if (loggedOut) {
-        console.log('[WA] Oturum kapatıldı, session temizleniyor.');
-        _telegramBot?.sendMessage(_telegramChatId, '🔴 WhatsApp oturumu kapandı. Ayarlar\'dan yeniden bağlanın.');
+      if (loggedOut || code === 405 || code === 401) {
+        // 405 = server rejected (stale/corrupt session), 401 = unauthorized
+        // Clear session so next connect starts fresh with a new QR
+        console.log('[WA] Session temizleniyor (kod: ' + code + ')');
         try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch {}
+        if (loggedOut) {
+          _telegramBot?.sendMessage(_telegramChatId, '🔴 WhatsApp oturumu kapandı. Ayarlar\'dan yeniden bağlanın.');
+        }
+        // Don't auto-reconnect on 405/401 — wait for manual WA_CONNECT command
       } else {
         _telegramBot?.sendMessage(_telegramChatId, '⚠️ WhatsApp bağlantısı koptu, 8s sonra yeniden bağlanılıyor...');
         _reconnectTimer = setTimeout(connectWA, 8_000);
@@ -340,7 +345,11 @@ async function disconnectWA() {
 
 /** Reconnect (or connect for the first time) without re-initing the module. */
 async function reconnectWA() {
-  console.log('[WA] Yeniden bağlanılıyor...');
+  // Always clear stale session so Baileys starts fresh and generates a new QR
+  clearTimeout(_reconnectTimer);
+  _reconnectTimer = null;
+  try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch {}
+  console.log('[WA] Session temizlendi, yeniden bağlanılıyor...');
   await connectWA();
 }
 

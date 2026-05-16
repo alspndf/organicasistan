@@ -114,3 +114,18 @@ export function getBotStatus(userId: string) {
     isOwner:   true,
   }
 }
+
+/** Send a newline-terminated command to the bot's stdin. */
+export function sendBotCommand(userId: string, command: string): { ok: boolean; error?: string } {
+  const state = getState(userId)
+  if (!state.process || state.process.killed) {
+    return { ok: false, error: 'Bot çalışmıyor.' }
+  }
+  try {
+    state.process.stdin?.write(command + '\n')
+    return { ok: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: msg }
+  }
+}

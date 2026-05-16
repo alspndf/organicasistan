@@ -47,6 +47,16 @@ let pendingAnalysisReschedule  = null;  // [{title,time}] incomplete tasks await
 let lastMessageAt = Date.now(); // inactivity tracking
 let inactivityFired = false;    // prevent repeated pings per silence window
 
+// WhatsApp state
+let waModule              = null;  // loaded lazily if WA is enabled
+let _waCurrentJid         = null;  // JID of the WA sender currently being processed
+let _pendingWATaskConfirm = null;  // { jid, title, time } — awaiting Telegram confirmation
+
+// Student monitoring
+let studentsModule = null;
+try { studentsModule = require('./students'); } catch {}
+const _pendingStudentMsgs = new Map(); // shortId → { phone, draft }
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_TASKS   = 9999;
 const TASK_MIN_M  = 30;   // minimum task block in minutes
@@ -112,6 +122,205 @@ function loadSchedules() {
   return mem.schedules || [];
 }
 
+// ─── Daily stats helpers ──────────────────────────────────────────────────────
+// Returns today's date string YYYY-MM-DD in user timezone
+function todayISO() {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
+}
+
+// Increment done count for today
+function recordDailyDone() {
+  const mem = loadMemory();
+  if (!mem.daily_stats) mem.daily_stats = {};
+  const d = todayISO();
+  if (!mem.daily_stats[d]) mem.daily_stats[d] = { done: 0, skipped: 0, postponed: 0 };
+  mem.daily_stats[d].done++;
+  saveMemory(mem);
+  console.log(`[STATS] done++  (today total: ${mem.daily_stats[d].done})`);
+}
+
+// Increment postponed count for today + update pattern
+function recordDailyPostponed(title) {
+  const mem = loadMemory();
+  if (!mem.daily_stats) mem.daily_stats = {};
+  const d = todayISO();
+  if (!mem.daily_stats[d]) mem.daily_stats[d] = { done: 0, skipped: 0, postponed: 0 };
+  mem.daily_stats[d].postponed++;
+  // Postpone pattern — key by first keyword in title (lowercase, max 20 chars)
+  if (title) {
+    const key = title.toLowerCase().split(/[\s,]/)[0].slice(0, 20);
+    if (!mem.postpone_patterns) mem.postpone_patterns = {};
+    mem.postpone_patterns[key] = (mem.postpone_patterns[key] || 0) + 1;
+  }
+  saveMemory(mem);
+  console.log(`[STATS] postponed++ "${title || ''}"`);
+}
+
+// Update today's skipped count (remaining pending at EOD, called from runDailyAnalysis)
+function updateDailyEODStats() {
+  const mem = loadMemory();
+  if (!mem.daily_stats) mem.daily_stats = {};
+  const d = todayISO();
+  if (!mem.daily_stats[d]) mem.daily_stats[d] = { done: 0, skipped: 0, postponed: 0 };
+  mem.daily_stats[d].done    = tasks.filter(t => t.status === 'done').length;
+  mem.daily_stats[d].skipped = tasks.filter(t => t.status === 'pending').length;
+  // Keep at most 90 days of stats to prevent unbounded growth
+  const keys = Object.keys(mem.daily_stats).sort();
+  if (keys.length > 90) {
+    keys.slice(0, keys.length - 90).forEach(k => delete mem.daily_stats[k]);
+  }
+  saveMemory(mem);
+}
+
+// Returns { done, skipped, postponed, rate } for a given date string
+function getStatsForDate(dateStr) {
+  const mem = loadMemory();
+  return (mem.daily_stats || {})[dateStr] || { done: 0, skipped: 0, postponed: 0 };
+}
+
+// Returns weekly aggregate (past 7 days including today)
+function getWeeklyStats() {
+  const today = todayISO();
+  let done = 0, skipped = 0, postponed = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(new Date(today).getTime() - i * 86400000).toISOString().split('T')[0];
+    const s = getStatsForDate(d);
+    done      += s.done;
+    skipped   += s.skipped;
+    postponed += s.postponed;
+  }
+  const total = done + skipped + postponed;
+  return { done, skipped, postponed, total, rate: total ? Math.round(done / total * 100) : 0 };
+}
+
+// ─── Habit tracking helpers ───────────────────────────────────────────────────
+// Keyword → habit name mapping (order matters: first match wins)
+const HABIT_MAP = [
+  { keywords: ['spor', 'egzersiz', 'yürüyüş', 'koşu', 'gym', 'fitness', 'antrenman'], habit: 'spor'       },
+  { keywords: ['okuma', 'kitap', 'oku'],                                               habit: 'okuma'      },
+  { keywords: ['meditasyon', 'meditasyon', 'yoga', 'nefes'],                           habit: 'meditasyon' },
+  { keywords: ['diyet', 'sağlıklı', 'su iç'],                                          habit: 'sağlık'     },
+  { keywords: ['ders', 'ödev', 'çalış'],                                               habit: 'çalışma'    },
+];
+
+function detectHabit(title) {
+  const lower = (title || '').toLowerCase();
+  for (const { keywords, habit } of HABIT_MAP) {
+    if (keywords.some(kw => lower.includes(kw))) return habit;
+  }
+  return null;
+}
+
+// Update habit streak on task done/notdone. Returns event object or null.
+function updateHabitStreak(title, done) {
+  const habit = detectHabit(title);
+  if (!habit) return null;
+
+  const mem = loadMemory();
+  if (!mem.habits) mem.habits = {};
+
+  const today     = todayISO();
+  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0];
+  const entry     = mem.habits[habit] || { streak: 0, last_done: null, total: 0 };
+
+  if (!done) {
+    // Task not completed — break streak if it was active
+    if (entry.streak > 0 && entry.last_done !== today) {
+      const broken = entry.streak;
+      entry.streak = 0;
+      mem.habits[habit] = entry;
+      saveMemory(mem);
+      console.log(`[HABIT] ${habit}: seri kırıldı (${broken} gündü)`);
+      return { broken: true, habit, streak: broken };
+    }
+    return null;
+  }
+
+  // Task completed
+  if (entry.last_done === today) return null; // already counted today
+
+  if (entry.last_done === yesterday || entry.streak === 0) {
+    entry.streak++;
+  } else {
+    entry.streak = 1; // gap in streak
+  }
+  entry.last_done = today;
+  entry.total++;
+  mem.habits[habit] = entry;
+  saveMemory(mem);
+  console.log(`[HABIT] ${habit}: streak=${entry.streak}, total=${entry.total}`);
+
+  const MILESTONES = [7, 14, 30, 60, 100];
+  if (MILESTONES.includes(entry.streak)) {
+    return { milestone: true, habit, streak: entry.streak };
+  }
+  return { updated: true, habit, streak: entry.streak };
+}
+
+// Build habit milestone message
+function habitMilestoneMsg(result) {
+  if (!result) return '';
+  if (result.broken) {
+    return result.streak > 0
+      ? `\n\n💔 ${result.habit} serisi kırıldı! (${result.streak} günlük seriydi). Yarın devam et 💪`
+      : '';
+  }
+  if (result.milestone) {
+    const emoji = result.streak >= 100 ? '🏆🏆🏆' : result.streak >= 60 ? '🏆🏆' : result.streak >= 30 ? '🏆' : '🔥';
+    const label = { 7: '1 hafta', 14: '2 hafta', 30: '1 ay', 60: '2 ay', 100: '100 gün' }[result.streak] || `${result.streak} gün`;
+    return `\n\n${emoji} ${result.habit.toUpperCase()} ${label.toUpperCase()} SERİSİ! Harika iş!`;
+  }
+  if (result.updated && result.streak > 1) {
+    return `\n🔥 ${result.habit} serisi: ${result.streak} gün`;
+  }
+  return '';
+}
+
+// ─── Weather (Open-Meteo, no API key needed) ──────────────────────────────────
+const WMO_CODES = {
+  0: 'Güneşli ☀️', 1: 'Güneşli ☀️', 2: 'Parçalı bulutlu ⛅', 3: 'Bulutlu 🌥️',
+  45: 'Sisli 🌫️', 48: 'Sisli 🌫️',
+  51: 'Çisenti 🌦️', 53: 'Çisenti 🌦️', 55: 'Çisenti 🌦️',
+  61: 'Yağmurlu 🌧️', 63: 'Yağmurlu 🌧️', 65: 'Yağmurlu 🌧️',
+  71: 'Karlı 🌨️', 73: 'Karlı 🌨️', 75: 'Karlı 🌨️', 77: 'Karlı 🌨️',
+  80: 'Sağanak 🌦️', 81: 'Sağanak 🌦️', 82: 'Sağanak 🌦️',
+  95: 'Fırtınalı ⛈️', 96: 'Fırtınalı ⛈️', 99: 'Fırtınalı ⛈️',
+};
+
+function weatherDesc(code) {
+  return WMO_CODES[code] || 'Bulutlu 🌥️';
+}
+
+async function getWeather() {
+  const lat = process.env.WEATHER_LAT || '41.01';
+  const lon = process.env.WEATHER_LON || '28.97';
+  const url = `/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto&forecast_days=1`;
+
+  return new Promise(resolve => {
+    const req = https.request({
+      hostname: 'api.open-meteo.com',
+      path:     url,
+      method:   'GET',
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString());
+          const c = data.current;
+          resolve({
+            temp: Math.round(c.temperature_2m),
+            desc: weatherDesc(c.weather_code),
+            wind: Math.round(c.wind_speed_10m),
+          });
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
 const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
@@ -141,10 +350,11 @@ function slotTaken(time) {
   return tasks.some(t => t.time === time && t.status === 'pending');
 }
 
-function addTask(title, time) {
-  const task = { id: `t${idCounter++}`, title, time, status: 'pending' };
+// project is optional — if provided, groups tasks visually
+function addTask(title, time, project) {
+  const task = { id: `t${idCounter++}`, title, time, status: 'pending', ...(project ? { project } : {}) };
   tasks.push(task);
-  console.log(`[ADD] ${task.time} — ${task.title}`);
+  console.log(`[ADD] ${task.time} — ${task.title}${project ? ` [${project}]` : ''}`);
   dbAdapter?.syncTask(task);
   return task;
 }
@@ -159,14 +369,44 @@ function sortedTasks() {
 
 function planText() {
   if (!tasks.length) return '📋 Görev yok.';
+  const sorted = sortedTasks();
+
+  // Group by project when any task has a project tag
+  if (sorted.some(t => t.project)) {
+    const groups = {};
+    const noProj = [];
+    for (const t of sorted) {
+      if (t.project) { (groups[t.project] = groups[t.project] || []).push(t); }
+      else noProj.push(t);
+    }
+    let out = '📋 Bugünün planı:\n';
+    for (const [proj, ptasks] of Object.entries(groups)) {
+      out += `\n📁 ${proj}\n`;
+      ptasks.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
+    }
+    if (noProj.length) {
+      out += '\n📁 Genel\n';
+      noProj.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
+    }
+    return out.trim();
+  }
+
   return '📋 Bugünün planı:\n\n' +
-    sortedTasks()
-      .map((t, i) => `${i + 1}. ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}`)
-      .join('\n');
+    sorted.map((t, i) => `${i + 1}. ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}`).join('\n');
 }
 
 // ─── Telegram helpers ─────────────────────────────────────────────────────────
 const send = text => bot.sendMessage(CHAT_ID, text);
+
+// Send to Telegram and/or WhatsApp based on WA_NOTIFY_CHANNEL env
+function notifyAll(text) {
+  const ch = (process.env.WA_NOTIFY_CHANNEL || 'telegram').toLowerCase();
+  if (ch === 'telegram' || ch === 'both') send(text);
+  if ((ch === 'whatsapp' || ch === 'both') && waModule) {
+    const { connected, phone } = waModule.getWAStatus();
+    if (connected && phone) waModule.sendWA(phone, text).catch(() => {});
+  }
+}
 
 function sendButtons(text, buttons) {
   return bot.sendMessage(CHAT_ID, text, {
@@ -243,6 +483,27 @@ function buildStaticSystem() {
     ).join('\n');
   }
 
+  // Erteleme pattern uyarıları — Claude'un proaktif olması için
+  if (mem.postpone_patterns) {
+    const top = Object.entries(mem.postpone_patterns)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .filter(([, v]) => v >= 2);
+    if (top.length) {
+      sys += `\n\n## Erteleme Uyarıları\n` +
+        top.map(([k, v]) => `- "${k}" başlıklı görevler ${v} kez ertelendi → teşvik edici ve anlayışlı ol`).join('\n');
+    }
+  }
+
+  // Aktif alışkanlık serileri
+  if (mem.habits) {
+    const active = Object.entries(mem.habits).filter(([, h]) => h.streak > 0);
+    if (active.length) {
+      sys += `\n\n## Aktif Alışkanlık Serileri\n` +
+        active.map(([k, h]) => `- ${k}: ${h.streak} günlük seri (toplam ${h.total})`).join('\n');
+    }
+  }
+
   return sys;
 }
 
@@ -258,9 +519,18 @@ function buildDynamicContext() {
     : 'Görev yok.';
   const pending = pendingTasks().length;
 
+  // Daily stats for today and yesterday
+  const statsToday = getStatsForDate(todayDate);
+  const yesterday  = new Date(new Date(todayDate).getTime() - 86400000).toISOString().split('T')[0];
+  const statsYday  = getStatsForDate(yesterday);
+  const ydayTotal  = statsYday.done + statsYday.skipped + statsYday.postponed;
+  const ydayRate   = ydayTotal ? Math.round(statsYday.done / ydayTotal * 100) : null;
+
   let ctx = `## Anlık Durum
-Tarih: ${todayDate} (${dayName}) | Saat: ${current} (İstanbul)
+Tarih: ${todayDate} (${dayName}) | Saat: ${current} (${TZ})
 Bekleyen görev: ${pending}
+Bugün tamamlanan: ${statsToday.done} | Ertelenen: ${statsToday.postponed}
+${ydayRate !== null ? `Dün tamamlama oranı: %${ydayRate} (${statsYday.done}/${ydayTotal})` : ''}
 ${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
 
 ## Bugünkü Görevler
@@ -279,13 +549,14 @@ ${taskList}`;
 const AGENT_TOOLS = [
   {
     name: 'add_task',
-    description: 'Yeni görev ekle. Gelecek bir tarih için date parametresi kullan (yarın, cumartesi, 3 gün sonra gibi). Bugün için date boş bırak.',
+    description: 'Yeni görev ekle. Gelecek bir tarih için date parametresi kullan (yarın, cumartesi, 3 gün sonra gibi). Bugün için date boş bırak. Proje bağlamı varsa project parametresi ekle.',
     input_schema: {
       type: 'object',
       properties: {
-        time:  { type: 'string', description: 'HH:MM formatında saat' },
-        title: { type: 'string', description: 'Görev başlığı' },
-        date:  { type: 'string', description: 'YYYY-MM-DD formatında tarih — sadece gelecek tarihler için. Bugün için boş bırak.' },
+        time:    { type: 'string', description: 'HH:MM formatında saat' },
+        title:   { type: 'string', description: 'Görev başlığı' },
+        date:    { type: 'string', description: 'YYYY-MM-DD formatında tarih — sadece gelecek tarihler için. Bugün için boş bırak.' },
+        project: { type: 'string', description: 'Proje adı (opsiyonel) — örn: "İş", "Kişisel", "Sağlık"' },
       },
       required: ['time', 'title'],
     },
@@ -417,6 +688,75 @@ const AGENT_TOOLS = [
       required: ['time', 'action', 'description'],
     },
   },
+  {
+    name: 'track_habit',
+    description: 'Alışkanlık takip listesini göster — aktif seriler, toplam sayılar ve son yapılma tarihleri.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'group_by_project',
+    description: 'Bugünkü görevleri proje klasörlerine göre gruplu göster.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'send_whatsapp_message',
+    description: 'Belirtilen telefon numarasına WhatsApp mesajı gönder. WhatsApp bağlı olmalı. Kullanıcı "WhatsApp\'tan mesaj gönder" veya belirli bir numaraya mesaj atmak istediğinde kullan.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        phone:   { type: 'string', description: 'Telefon numarası — ülke kodu dahil, örn: 905321234567' },
+        message: { type: 'string', description: 'Gönderilecek mesaj metni' },
+      },
+      required: ['phone', 'message'],
+    },
+  },
+  {
+    name: 'add_student',
+    description: 'Mentörlük öğrencisi ekle. İsim ve WhatsApp numarası zorunlu. Grup adı opsiyonel (örn: "Grup A", "Ocak Kohort"). Öğrenci WhatsApp grubundan mesaj attığında aktivitesi otomatik takip edilecek.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:  { type: 'string', description: 'Öğrencinin adı soyadı' },
+        phone: { type: 'string', description: 'WhatsApp numarası — ülke kodu dahil, örn: 905321234567' },
+        group: { type: 'string', description: 'Grup adı (opsiyonel), örn: "Grup A"' },
+      },
+      required: ['name', 'phone'],
+    },
+  },
+  {
+    name: 'list_students',
+    description: 'Kayıtlı öğrencileri listele. Grup filtresi ile sadece o gruptakileri göster. Aktivite durumunu (son görülme, sessizlik günü) gösterir.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: 'Filtrele: sadece bu gruptaki öğrenciler (opsiyonel)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'student_report',
+    description: 'Öğrenci aktivite raporu: kim kaç gündür sessiz, son ne yazdı, bu hafta kaç mesaj attı. Sessizlik eşiği belirlenebilir.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        min_silent_days: { type: 'number', description: 'Bu kadar gün ve üzeri sessiz olanları göster (varsayılan: 1)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'send_student_message',
+    description: 'İsim veya numara ile öğrenciye WhatsApp mesajı gönder. WhatsApp bağlı olmalı.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        identifier: { type: 'string', description: 'Öğrenci adı (kısmi eşleşme) veya telefon numarası' },
+        message:    { type: 'string', description: 'Gönderilecek mesaj' },
+      },
+      required: ['identifier', 'message'],
+    },
+  },
 ];
 
 // ─── Claude: daily planner ────────────────────────────────────────────────────
@@ -465,6 +805,7 @@ async function generateDailyPlan(userText) {
 
 // ─── Daily analysis ───────────────────────────────────────────────────────────
 async function runDailyAnalysis() {
+  updateDailyEODStats(); // snapshot skipped count before analyzing
   const done    = tasks.filter(t => t.status === 'done');
   const pending = tasks.filter(t => t.status === 'pending');
   const total   = tasks.length;
@@ -701,8 +1042,23 @@ async function executeTool(name, input) {
       if (tasks.filter(x => x.status === 'pending').length >= MAX_TASKS)
         return `❌ Maksimum ${MAX_TASKS} görev limitine ulaşıldı.`;
       if (slotTaken(t)) return `❌ ${t} saatinde zaten görev var.`;
-      const task = addTask(input.title, t);
-      return `✅ Eklendi: ${task.time} — ${task.title}`;
+
+      // WhatsApp source: ask for Telegram confirmation before adding
+      if (_waCurrentJid && !_pendingWATaskConfirm) {
+        _pendingWATaskConfirm = { jid: _waCurrentJid, title: input.title, time: t };
+        sendButtons(
+          `📲 *WhatsApp'tan görev:*\n\n⏳ ${t} — ${input.title}\n\nEkleyeyim mi?`,
+          [
+            { label: '✅ Evet, ekle', data: 'WA_CONFIRM:yes' },
+            { label: '❌ Hayır',      data: 'WA_CONFIRM:no' },
+          ]
+        );
+        return `Telegram onayı bekleniyor: "${t} — ${input.title}"`;
+      }
+
+      const task = addTask(input.title, t, input.project || null);
+      const projLabel = task.project ? ` [${task.project}]` : '';
+      return `✅ Eklendi: ${task.time} — ${task.title}${projLabel}`;
     }
 
     case 'edit_task': {
@@ -754,7 +1110,10 @@ async function executeTool(name, input) {
       task.status = 'done';
       pendingReschedule = null;
       dbAdapter?.updateTaskStatus(task.id, 'done');
-      return `✅ Tamamlandı: ${task.time} — ${task.title}`;
+      // Record daily stat + check habit streak
+      recordDailyDone();
+      const habitResult = updateHabitStreak(task.title, true);
+      return `✅ Tamamlandı: ${task.time} — ${task.title}${habitMilestoneMsg(habitResult)}`;
     }
 
     case 'reschedule_task': {
@@ -770,6 +1129,8 @@ async function executeTool(name, input) {
       task.time = newTime;
       pendingReschedule = null;
       dbAdapter?.syncTask(task);
+      // Record postpone stat + pattern
+      recordDailyPostponed(task.title);
       return `✅ Taşındı: ${task.time} — ${task.title}`;
     }
 
@@ -854,30 +1215,182 @@ async function executeTool(name, input) {
       try {
         const webUrl    = process.env.WEB_APP_URL || 'http://localhost:3000';
         const botSecret = process.env.BOT_SECRET || 'organic-bot-internal';
+        const userId    = process.env.WEB_USER_ID || '';
         const res  = await fetch(`${webUrl}/api/email/bot-analyze`, {
           method: 'POST',
-          headers: { 'x-bot-secret': botSecret },
+          headers: {
+            'x-bot-secret':  botSecret,
+            'x-bot-user-id': userId,
+          },
         });
         const data = await res.json();
-        if (!res.ok) return `❌ ${data.error || 'E-postalar alınamadı.'}`;
+
+        if (!res.ok) {
+          const errorMsg = data.error || 'E-postalar alınamadı.';
+
+          // Auth expired or not connected → send reconnect button to Telegram
+          if (data.errorType === 'auth_expired' || data.errorType === 'not_connected') {
+            const webAppUrl = process.env.WEB_APP_URL_PUBLIC || webUrl;
+            bot.sendMessage(CHAT_ID, `⚠️ ${errorMsg}\n\nGmail bağlantısını yenilemek için aşağıdaki butona tıklayın:`, {
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: '🔗 Gmail\'i Yeniden Bağla', url: `${webAppUrl}/settings` },
+                ]],
+              },
+            });
+            return `⚠️ ${errorMsg}`;
+          }
+
+          return `❌ ${errorMsg}`;
+        }
 
         const { summary, actionItems, emailCount } = data;
-        let result = `${emailCount} e-posta analiz edildi.\n`;
-        if (summary) result += `Özet: ${summary}\n`;
+        const typeIcons = { meeting: '🗓', action: '✅', deadline: '⏰', info: 'ℹ️' };
+        const priorityMark = { high: '🔴', medium: '🟡', low: '🟢' };
+
+        let result = `📧 *${emailCount} e-posta analiz edildi*\n`;
+        if (summary) result += `\n${summary}\n`;
+
         if (actionItems?.length) {
-          result += `\nAksiyon öğeleri (${actionItems.length}):\n`;
+          result += `\n*Aksiyon gerektiren (${actionItems.length}):*\n`;
           actionItems.forEach((item, i) => {
-            result += `${i + 1}. [${item.type}] ${item.title}`;
-            if (item.time) result += ` — ${item.time}`;
-            if (item.from) result += ` (${item.from})`;
-            result += '\n';
+            const icon = typeIcons[item.type] || '•';
+            const prio = priorityMark[item.priority] || '';
+            result += `\n${i + 1}. ${icon} ${prio} *${item.title}*`;
+            if (item.time) result += `\n   ⏱ ${item.time}`;
+            if (item.from) result += `\n   📨 ${item.from}`;
           });
         } else {
-          result += 'Bugün için aksiyon gerektiren e-posta yok.';
+          result += '\n✅ Bugün için aksiyon gerektiren e-posta yok.';
         }
         return result;
       } catch (e) {
         return `❌ E-posta analizi başarısız: ${e.message}`;
+      }
+    }
+
+    case 'track_habit': {
+      const mem = loadMemory();
+      const habits = mem.habits || {};
+      if (!Object.keys(habits).length) {
+        return '📊 Henüz takip edilen alışkanlık yok.\nGörevler tamamlandıkça otomatik algılanır (spor, okuma, meditasyon vb.)';
+      }
+      const lines = ['📊 *Alışkanlık Takibi:*'];
+      for (const [habit, h] of Object.entries(habits).sort(([,a],[,b]) => b.streak - a.streak)) {
+        const fire = h.streak >= 30 ? '🏆' : h.streak >= 7 ? '🔥' : h.streak >= 3 ? '⭐' : '•';
+        lines.push(`${fire} ${habit}: ${h.streak} gün seri | Toplam: ${h.total} | Son: ${h.last_done || '-'}`);
+      }
+      return lines.join('\n');
+    }
+
+    case 'group_by_project': {
+      if (!tasks.length) return '📋 Görev yok.';
+      const grouped = {};
+      const noProj  = [];
+      for (const t of sortedTasks()) {
+        if (t.project) { (grouped[t.project] = grouped[t.project] || []).push(t); }
+        else noProj.push(t);
+      }
+      if (!Object.keys(grouped).length) return planText();
+      let out = '📋 *Görevler (Projeye Göre):*';
+      for (const [proj, ptasks] of Object.entries(grouped)) {
+        out += `\n\n📁 *${proj}*\n`;
+        ptasks.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
+      }
+      if (noProj.length) {
+        out += '\n📁 *Genel*\n';
+        noProj.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
+      }
+      return out.trim();
+    }
+
+    case 'send_whatsapp_message': {
+      if (!waModule) return '❌ WhatsApp entegrasyonu aktif değil (WA_ENABLED=true ayarlayın).';
+      const { connected } = waModule.getWAStatus();
+      if (!connected) return '❌ WhatsApp bağlı değil. Telegram\'dan bağlantı kurun.';
+      try {
+        await waModule.sendWA(input.phone, input.message);
+        return `✅ WhatsApp mesajı gönderildi → ${input.phone}`;
+      } catch (e) {
+        return `❌ WhatsApp mesajı gönderilemedi: ${e.message}`;
+      }
+    }
+
+    case 'add_student': {
+      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
+      const result = studentsModule.addStudent(input.name, input.phone, input.group || '');
+      if (result.error) return `❌ ${result.error}`;
+      return `✅ Öğrenci eklendi: ${result.name} (${result.phone})${result.group ? ` — Grup: ${result.group}` : ''}`;
+    }
+
+    case 'list_students': {
+      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
+      const list = studentsModule.loadStudents();
+      if (!list.length) return '📋 Henüz öğrenci kaydı yok. "add_student" ile ekle.';
+      const filtered = input.group
+        ? list.filter(s => s.group?.toLowerCase().includes(input.group.toLowerCase()))
+        : list;
+      if (!filtered.length) return `❌ "${input.group}" grubunda öğrenci yok.`;
+      const activity = studentsModule.loadActivity();
+      const today = todayISO();
+      const lines = [`👥 ${filtered.length} öğrenci:\n`];
+      const byGroup = {};
+      for (const s of filtered) {
+        const g = s.group || 'Grup yok';
+        (byGroup[g] = byGroup[g] || []).push(s);
+      }
+      for (const [grp, students] of Object.entries(byGroup)) {
+        lines.push(`📁 ${grp}`);
+        for (const s of students) {
+          const act = activity[s.phone] || {};
+          const lastDate = act.lastMessageDate;
+          const daysSilent = lastDate
+            ? Math.max(0, Math.floor((Date.now() - new Date(lastDate + 'T00:00:00').getTime()) / 86400000))
+            : 999;
+          const status = daysSilent === 999 ? '❓ hiç mesaj yok'
+            : daysSilent === 0 ? '🟢 bugün aktif'
+            : daysSilent === 1 ? '🟡 dün aktif'
+            : daysSilent <= 3 ? `🟠 ${daysSilent}g sessiz`
+            : `🔴 ${daysSilent === 999 ? '??' : daysSilent}g sessiz`;
+          lines.push(`  ${s.name} · ${status}`);
+        }
+      }
+      return lines.join('\n');
+    }
+
+    case 'student_report': {
+      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
+      const minDays = input.min_silent_days ?? 1;
+      const report = studentsModule.getStudentReport().filter(s => s.daysSilent >= minDays);
+      if (!report.length) return `✅ ${minDays}+ gün sessiz öğrenci yok! Herkes aktif.`;
+      const lines = [`📊 ${minDays}+ gün sessiz öğrenciler (${report.length}):\n`];
+      for (const s of report) {
+        const days = s.daysSilent === 999 ? 'hiç mesaj atmadı' : `${s.daysSilent} gündür sessiz`;
+        const last = s.lastMessage ? `\n    Son: "${s.lastMessage.slice(0, 60)}"` : '';
+        const flag = s.flag === 'critical' ? '🔴' : s.flag === 'warning' ? '🟠' : '🟡';
+        lines.push(`${flag} ${s.name}${s.group ? ` (${s.group})` : ''} — ${days}${last}`);
+      }
+      return lines.join('\n');
+    }
+
+    case 'send_student_message': {
+      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
+      if (!waModule) return '❌ WhatsApp entegrasyonu aktif değil.';
+      const { connected } = waModule.getWAStatus();
+      if (!connected) return '❌ WhatsApp bağlı değil.';
+      const students = studentsModule.loadStudents();
+      const lower    = input.identifier.toLowerCase();
+      const clean    = input.identifier.replace(/\D/g, '');
+      const found    = students.find(s =>
+        s.name.toLowerCase().includes(lower) ||
+        (clean.length >= 5 && s.phone === clean)
+      );
+      if (!found) return `❌ "${input.identifier}" adında/numarasında öğrenci bulunamadı.`;
+      try {
+        await waModule.sendWA(found.phone, input.message);
+        return `✅ ${found.name}'e (${found.phone}) WhatsApp mesajı gönderildi.`;
+      } catch (e) {
+        return `❌ Gönderilemedi: ${e.message}`;
       }
     }
 
@@ -887,6 +1400,16 @@ async function executeTool(name, input) {
 }
 
 // ─── Agent: main loop ─────────────────────────────────────────────────────────
+// waJid: optional WhatsApp JID — if set, response is also sent to WA
+async function runAgentFromWA(text, jid) {
+  _waCurrentJid = jid;
+  try {
+    await runAgent(text);
+  } finally {
+    _waCurrentJid = null;
+  }
+}
+
 async function runAgent(userText) {
   conversationHistory.push({ role: 'user', content: userText });
   while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
@@ -920,7 +1443,14 @@ async function runAgent(userText) {
     if (response.stop_reason === 'end_turn' || !toolUses.length) {
       const finalText = response.content.filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
       if (finalText) {
+        // Send to Telegram always; also to WhatsApp if request came from WA
         send(finalText);
+        if (_waCurrentJid && waModule) {
+          const ch = (process.env.WA_NOTIFY_CHANNEL || 'telegram').toLowerCase();
+          if (ch === 'whatsapp' || ch === 'both') {
+            waModule.sendWA(_waCurrentJid, finalText).catch(() => {});
+          }
+        }
         conversationHistory.push({ role: 'assistant', content: response.content });
         while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
         scheduleSaveHistory();
@@ -978,6 +1508,46 @@ bot.on('callback_query', async query => {
   await bot.answerCallbackQuery(query.id);
   const data = query.data;
 
+  // ── WhatsApp task confirmation ─────────────────────────────────────────────
+  if (data.startsWith('WA_CONFIRM:')) {
+    if (data === 'WA_CONFIRM:yes' && _pendingWATaskConfirm) {
+      const { jid, title, time } = _pendingWATaskConfirm;
+      if (slotTaken(time)) {
+        send(`❌ ${time} saatinde zaten başka bir görev var.`);
+        waModule?.sendWA(jid, `❌ ${time} saatinde başka görev var.`).catch(() => {});
+      } else if (tasks.filter(x => x.status === 'pending').length >= MAX_TASKS) {
+        send('❌ Görev limiti doldu.');
+      } else {
+        const task = addTask(title, time);
+        send(`✅ WhatsApp görevi eklendi: ${task.time} — ${task.title}`);
+        waModule?.sendWA(jid, `✅ Görev eklendi: ${task.time} — ${task.title}`).catch(() => {});
+      }
+    } else if (_pendingWATaskConfirm) {
+      send('❌ WhatsApp görevi eklenmedi.');
+      waModule?.sendWA(_pendingWATaskConfirm.jid, '❌ Görev eklenmedi.').catch(() => {});
+    }
+    _pendingWATaskConfirm = null;
+    return;
+  }
+
+  // ── Student follow-up quick-send ──────────────────────────────────────────
+  if (data.startsWith('SEND_STUDENT:')) {
+    const btnId   = data.slice('SEND_STUDENT:'.length);
+    const pending = _pendingStudentMsgs.get(btnId);
+    if (!pending) { send('❌ Bu buton artık geçerli değil.'); return; }
+    if (!waModule) { send('❌ WhatsApp aktif değil.'); return; }
+    const { connected } = waModule.getWAStatus();
+    if (!connected) { send('❌ WhatsApp bağlı değil.'); return; }
+    try {
+      await waModule.sendWA(pending.phone, pending.draft);
+      send(`✅ *${pending.name}*'e mesaj gönderildi:\n_${pending.draft}_`);
+      _pendingStudentMsgs.delete(btnId);
+    } catch (e) {
+      send(`❌ Gönderilemedi: ${e.message}`);
+    }
+    return;
+  }
+
   if (data.startsWith('DONE:')) {
     const task = tasks.find(t => t.id === data.slice(5));
     if (task) {
@@ -991,11 +1561,119 @@ bot.on('callback_query', async query => {
   }
 
   if (data.startsWith('NOTDONE:')) {
-    const task = tasks.find(t => t.id === data.slice(8));
+    const taskId = data.slice(8);
+    const task   = tasks.find(t => t.id === taskId);
     if (task) {
       pendingReschedule = task.id;
-      send(`Sorun değil ${USER_NAME} 😊 Kaça taşıyalım?`);
+      // Check habit streak break
+      const habitResult = updateHabitStreak(task.title, false);
+      if (habitResult?.broken) {
+        send(habitMilestoneMsg(habitResult).trim());
+      }
+      // Smart postpone: 3 options
+      bot.sendMessage(CHAT_ID,
+        `Sorun değil ${USER_NAME} 😊\n\n📌 ${task.title}\n\nNe yapalım?`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🕐 2 saat sonra',    callback_data: `POSTPONE:2h:${taskId}` },
+                { text: '🌙 Yarına',           callback_data: `POSTPONE:tomorrow:${taskId}` },
+              ],
+              [{ text: '📝 Neden erteledin?', callback_data: `POSTPONE:reason:${taskId}` }],
+            ],
+          },
+        }
+      );
     }
+    return;
+  }
+
+  // ── Smart postpone actions ─────────────────────────────────────────────────
+  if (data.startsWith('POSTPONE:')) {
+    const [, action, ...rest] = data.split(':');
+    const taskId = rest.join(':');
+    const task   = tasks.find(t => t.id === taskId);
+
+    if (action === '2h') {
+      if (task) {
+        const newTime = addMins(task.time, 120);
+        if (!slotTaken(newTime)) {
+          const old = task.time;
+          firedKeys.delete(`fire:${task.id}:${old}`);
+          firedKeys.delete(`pre:${task.id}:${old}`);
+          task.time = newTime;
+          dbAdapter?.syncTask(task);
+          recordDailyPostponed(task.title);
+          pendingReschedule = null;
+          send(`⏰ "${task.title}" → ${newTime} saatine taşındı.`);
+          console.log(`[POSTPONE] 2h: ${task.title} → ${newTime}`);
+        } else {
+          send(`❌ ${newTime} saatinde başka görev var. Farklı bir saat yazın:`);
+        }
+      }
+      return;
+    }
+
+    if (action === 'tomorrow') {
+      if (task) {
+        const tomorrow    = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toLocaleDateString('sv-SE', { timeZone: TZ });
+        const newId       = `t${idCounter++}`;
+        dbAdapter?.syncTask({ id: newId, title: task.title, time: task.time, status: 'pending', ...(task.project ? { project: task.project } : {}) }, tomorrowStr);
+        task.status = 'done'; // mark as handled today (not re-shown tonight)
+        dbAdapter?.updateTaskStatus(task.id, 'done');
+        pendingReschedule = null;
+        recordDailyPostponed(task.title);
+        send(`🌙 "${task.title}" yarına (${task.time}) taşındı.`);
+        console.log(`[POSTPONE] tomorrow: ${task.title}`);
+      }
+      return;
+    }
+
+    if (action === 'reason') {
+      if (task) {
+        bot.sendMessage(CHAT_ID, `"${task.title}" için neden erteliyorsunuz?`, {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '⏰ Zamanım olmadı',    callback_data: `REASON:time:${taskId}` },
+                { text: '😴 Yorgunum',           callback_data: `REASON:tired:${taskId}` },
+              ],
+              [
+                { text: '🔄 Önceliğim değişti', callback_data: `REASON:priority:${taskId}` },
+                { text: '💭 Diğer',              callback_data: `REASON:other:${taskId}` },
+              ],
+            ],
+          },
+        });
+      }
+      return;
+    }
+  }
+
+  // ── Postpone reason logging ────────────────────────────────────────────────
+  if (data.startsWith('REASON:')) {
+    const [, reason, ...rest] = data.split(':');
+    const taskId  = rest.join(':');
+    const task    = tasks.find(t => t.id === taskId);
+    const REASON_MAP = { time: 'Zamanım olmadı', tired: 'Yorgunluk', priority: 'Öncelik değişimi', other: 'Diğer' };
+    const reasonText = REASON_MAP[reason] || reason;
+
+    const mem = loadMemory();
+    if (!mem.postpone_reasons) mem.postpone_reasons = [];
+    mem.postpone_reasons.push({
+      task: task?.title || taskId,
+      reason: reasonText,
+      date: todayISO(),
+    });
+    if (mem.postpone_reasons.length > 50) mem.postpone_reasons = mem.postpone_reasons.slice(-50);
+    saveMemory(mem);
+
+    if (task) pendingReschedule = task.id;
+    send(`📝 Neden kaydedildi: "${reasonText}".\n${task ? 'Kaça taşıyalım? Saati yazın.' : ''}`);
+    console.log(`[REASON] ${task?.title || taskId}: ${reasonText}`);
     return;
   }
 });
@@ -1096,38 +1774,240 @@ process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT] uncaughtException:', err.message);
 });
 
-// ─── Cron: 09:00 — daily plan ─────────────────────────────────────────────────
-cron.schedule('0 9 * * *', () => {
-  const dayName  = DAY_LABELS[todayDayIndex()] || '';
-  const mem      = loadMemory();
-  const dayItems = mem.weekly_schedule[todayKey()] || [];
-  const pending  = pendingTasks();
-
-  const lines = [`📅 ${dayName} günün planı:`];
-  if (dayItems.length) lines.push(`\nHafıza: ${dayItems.join(', ')}`);
-
-  if (!pending.length) {
-    lines.push('\nGörev yok.');
-  } else {
-    lines.push('');
-    pending.forEach(t => lines.push(`⏳ ${t.time} — ${t.title}`));
+// ─── Stdin command listener (from web app / bot-manager) ──────────────────────
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', async (line) => {
+  const cmd = line.trim();
+  if (cmd === 'WA_CONNECT') {
+    console.log('[CMD] WA_CONNECT alındı.');
+    if (!waModule) {
+      waModule = (() => { try { return require('./whatsapp'); } catch (e) { console.warn('[WA] whatsapp.js yüklenemedi:', e.message); return null; } })();
+    }
+    if (waModule) {
+      waModule.reconnectWA().catch(e => console.error('[CMD] WA_CONNECT hatası:', e.message));
+    }
+  } else if (cmd === 'WA_DISCONNECT') {
+    console.log('[CMD] WA_DISCONNECT alındı.');
+    if (waModule) {
+      waModule.disconnectWA().catch(e => console.error('[CMD] WA_DISCONNECT hatası:', e.message));
+    }
   }
-  send(lines.join('\n'));
-  console.log('[CRON] 09:00 plan gönderildi.');
+});
+
+// ─── Cron: 08:00 — smart morning briefing ────────────────────────────────────
+cron.schedule('0 8 * * *', async () => {
+  console.log('[CRON] 08:00 akıllı brifing başlatılıyor...');
+  try {
+    const dayName   = DAY_LABELS[todayDayIndex()] || '';
+    const mem       = loadMemory();
+    const dayItems  = mem.weekly_schedule[todayKey()] || [];
+    const pending   = pendingTasks();
+
+    // Weather
+    const weather   = await getWeather();
+    const weatherTxt = weather
+      ? `${weather.desc}, ${weather.temp}°C, rüzgar ${weather.wind} km/s`
+      : 'hava durumu alınamadı';
+
+    // Stats
+    const today     = todayISO();
+    const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0];
+    const ystStats  = getStatsForDate(yesterday);
+    const ystTotal  = ystStats.done + ystStats.skipped;
+    const ystRate   = ystTotal ? Math.round(ystStats.done / ystTotal * 100) : null;
+    const weekly    = getWeeklyStats();
+
+    // Postpone warnings
+    const patterns  = mem.postpone_patterns || {};
+    const topPostpone = Object.entries(patterns)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${k} (${v}x)`)
+      .join(', ');
+
+    // Active habit streaks
+    const habits    = mem.habits || {};
+    const activeStreaks = Object.entries(habits)
+      .filter(([, h]) => h.streak > 0)
+      .map(([name, h]) => `${name}: ${h.streak} gün`)
+      .join(', ');
+
+    // Build context for Claude
+    const contextLines = [
+      `Bugün: ${dayName}`,
+      `Hava: ${weatherTxt}`,
+      ystRate !== null ? `Dün tamamlama: %${ystRate} (${ystStats.done}/${ystTotal})` : 'Dün: veri yok',
+      `Bu hafta ortalama: %${weekly.rate} (${weekly.done} görev tamamlandı)`,
+    ];
+    if (topPostpone)    contextLines.push(`En çok ertelenen: ${topPostpone}`);
+    if (activeStreaks)  contextLines.push(`Aktif seriler: ${activeStreaks}`);
+    if (dayItems.length) contextLines.push(`Hafıza: ${dayItems.join(', ')}`);
+    if (pending.length) {
+      contextLines.push(`\nBugünkü ${pending.length} görev:`);
+      pending.forEach(t => contextLines.push(`  ${t.time} — ${t.title}`));
+    } else {
+      contextLines.push('Bugün henüz görev yok.');
+    }
+
+    let briefing;
+    try {
+      const r = await anthropic.messages.create({
+        model: MODEL, max_tokens: 400,
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Sabah brifing mesajı yaz: kısa (3-4 cümle), samimi, motive edici. İstatistiklere ve hava durumuna göre özelleştir. Türkçe yaz.`,
+        messages: [{
+          role: 'user',
+          content: contextLines.join('\n') + '\n\nBu bilgileri kullanarak kişiselleştirilmiş, motive edici bir sabah mesajı yaz.',
+        }],
+      });
+      briefing = r.content[0].text.trim();
+    } catch {
+      briefing = `Günaydın ${USER_NAME}! ${weatherTxt}. ${pending.length ? `Bugün ${pending.length} görevin var.` : 'Henüz görev eklenmemiş.'}`;
+    }
+
+    const lines = [`🌅 *Günaydın, ${USER_NAME}!*\n`, briefing];
+    if (pending.length) {
+      lines.push(`\n📋 *Bugünkü görevler:*`);
+      pending.forEach(t => lines.push(`⏳ ${t.time} — ${t.title}`));
+    }
+
+    notifyAll(lines.join('\n'));
+    console.log('[CRON] 08:00 brifing gönderildi.');
+
+    // ── Student follow-up analysis (runs after main briefing) ──────────────
+    if (studentsModule) {
+      try {
+        const summary = studentsModule.getMorningSummary();
+        if (summary && (summary.critical.length + summary.warning.length) > 0) {
+          const needAttention = [...summary.critical, ...summary.warning].slice(0, 8);
+
+          // Ask Claude to draft a personal WA message for each student
+          const studentContext = needAttention.map(s =>
+            `- ${s.name}${s.group ? ` (${s.group})` : ''}: ${s.daysSilent === 999 ? 'hiç mesaj atmadı' : `${s.daysSilent} gündür sessiz`}${s.lastMessage ? `, son yazdığı: "${s.lastMessage.slice(0, 80)}"` : ''}`
+          ).join('\n');
+
+          let drafts = [];
+          try {
+            const r = await anthropic.messages.create({
+              model: MODEL, max_tokens: 600,
+              system: `Sen ${ASSISTANT_NAME}, bir mentörün asistanısın. Her öğrenci için kısa, samimi, Türkçe bir WhatsApp mesajı taslağı yaz. Mentörün adı ${USER_NAME}. Mesajlar 1-2 cümle, doğal ve sıcak olmalı. SADECE JSON döndür: [{"name":"...","draft":"..."}]`,
+              messages: [{
+                role: 'user',
+                content: `Aşağıdaki öğrenciler için takip mesajı taslağı yaz:\n${studentContext}`,
+              }],
+            });
+            const raw = r.content[0].text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            drafts = JSON.parse(raw);
+          } catch {
+            drafts = needAttention.map(s => ({
+              name:  s.name,
+              draft: `Merhaba ${s.name.split(' ')[0]}! Nasıl gidiyorsun? Bir süredir görüşemedik.`,
+            }));
+          }
+
+          // Build Telegram message with inline [Gönder] buttons
+          const studentLines = [`\n📚 *${needAttention.length} öğrenci takip gerekiyor:*\n`];
+          const keyboard     = [];
+
+          for (let i = 0; i < drafts.length; i++) {
+            const s     = needAttention[i];
+            const draft = (drafts[i]?.draft || `Merhaba ${s.name.split(' ')[0]}, nasılsın?`);
+            const days  = s.daysSilent === 999 ? 'hiç aktif olmadı' : `${s.daysSilent}g sessiz`;
+            const flag  = s.flag === 'critical' ? '🔴' : '🟠';
+
+            studentLines.push(`${flag} *${s.name}* — ${days}`);
+            studentLines.push(`_"${draft}"_`);
+
+            // Store draft in Map with short ID (Telegram callback_data max 64 bytes)
+            const btnId = `sm${Date.now()}_${i}`;
+            _pendingStudentMsgs.set(btnId, { phone: s.phone, name: s.name, draft });
+            keyboard.push([{ text: `📨 ${s.name.split(' ')[0]}'e Gönder`, callback_data: `SEND_STUDENT:${btnId}` }]);
+          }
+
+          if (summary.total > 0) {
+            studentLines.push(`\n_Toplam ${summary.total} öğrenci · ${summary.active.length} aktif · ${summary.critical.length + summary.warning.length} takip gerekli_`);
+          }
+
+          bot.sendMessage(CHAT_ID, studentLines.join('\n'), {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: keyboard },
+          });
+          console.log(`[CRON] ${needAttention.length} öğrenci takip mesajı gönderildi.`);
+        }
+      } catch (e) {
+        console.error('[CRON] Öğrenci analizi hatası:', e.message);
+      }
+    }
+  } catch (e) {
+    console.error('[CRON] 08:00 brifing hatası:', e.message);
+  }
 }, { timezone: TZ });
 
 // ─── Cron: 11:00 — email summary ─────────────────────────────────────────────
 cron.schedule('0 11 * * *', () => {
-  send(
-    '📧 E-posta özeti:\n\n' +
-    '🔴 Önemli:\n' +
-    '  • Proje teslim tarihi (ekip@sirket.com)\n' +
-    '  • Hedef takibi (yonetici@sirket.com)\n\n' +
-    '🟡 Orta:\n' +
-    '  • Haftalık bülten (bulten@tech.com)\n\n' +
-    'Göreve dönüştürmek için:\n"15:00 e-posta yanıtları"'
-  );
-  console.log('[CRON] 11:00 e-posta özeti gönderildi.');
+  console.log('[CRON] 11:00 e-posta özeti başlatılıyor...');
+  runAgent('E-postalarımı analiz et, önemli ve aksiyon gerektirenleri özetle.')
+    .catch(e => console.error('[CRON] 11:00 e-posta hatası:', e.message));
+}, { timezone: TZ });
+
+// ─── Cron: Pazar 21:00 — weekly summary ──────────────────────────────────────
+cron.schedule('0 21 * * 0', async () => {
+  console.log('[CRON] Pazar 21:00 haftalık özet başlatılıyor...');
+  try {
+    const weekly    = getWeeklyStats();
+    const mem       = loadMemory();
+
+    // Top postponed categories
+    const patterns  = mem.postpone_patterns || {};
+    const topPostpone = Object.entries(patterns)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([k, v]) => `${k} (${v}x)`)
+      .join(', ');
+
+    // Active habit streaks
+    const habits    = mem.habits || {};
+    const activeStreaks = Object.entries(habits)
+      .filter(([, h]) => h.streak > 0)
+      .sort((a, b) => b[1].streak - a[1].streak)
+      .map(([name, h]) => `${name}: ${h.streak} gün`)
+      .join(', ');
+
+    const contextLines = [
+      `Haftalık özet (son 7 gün):`,
+      `- Tamamlanan görevler: ${weekly.done}`,
+      `- Atlanan görevler: ${weekly.skipped}`,
+      `- Ertelenen görevler: ${weekly.postponed}`,
+      `- Tamamlama oranı: %${weekly.rate}`,
+    ];
+    if (topPostpone)   contextLines.push(`En çok ertelenen kategoriler: ${topPostpone}`);
+    if (activeStreaks) contextLines.push(`Aktif alışkanlık serileri: ${activeStreaks}`);
+
+    let summary;
+    try {
+      const r = await anthropic.messages.create({
+        model: MODEL, max_tokens: 500,
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Haftalık motivasyon özeti yaz: samimi, içten, 4-5 cümle. Başarıları kutla, iyileştirme alanlarını nazikçe belirt. Türkçe yaz.`,
+        messages: [{
+          role: 'user',
+          content: contextLines.join('\n') + '\n\nBu istatistiklere göre motive edici bir haftalık özet yaz.',
+        }],
+      });
+      summary = r.content[0].text.trim();
+    } catch {
+      summary = weekly.rate >= 70
+        ? `${USER_NAME}, bu hafta harika bir performans gösterdiniz! %${weekly.rate} tamamlama oranıyla ${weekly.done} görev tamamladınız. 🎉`
+        : `${USER_NAME}, bu hafta ${weekly.done} görev tamamladınız. Önümüzdeki hafta daha da iyi olacak! 💪`;
+    }
+
+    const lines = [`📊 *Haftalık Özet*\n`, summary, `\n📈 Bu hafta: ${weekly.done} tamamlandı • ${weekly.skipped} atlandı • ${weekly.postponed} ertelendi (%${weekly.rate})`];
+    if (activeStreaks) lines.push(`🔥 Aktif seriler: ${activeStreaks}`);
+
+    notifyAll(lines.join('\n'));
+    console.log('[CRON] Pazar haftalık özet gönderildi.');
+  } catch (e) {
+    console.error('[CRON] Haftalık özet hatası:', e.message);
+  }
 }, { timezone: TZ });
 
 // ─── Inactivity check (every 10 min, fires after 90 min silence) ─────────────
@@ -1245,5 +2125,61 @@ Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
       ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
       : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊`;
     send(startupMsg);
+  }
+
+  // ─── WhatsApp init (optional) ──────────────────────────────────────────────
+  const waEnabled = process.env.WA_ENABLED === 'true' || !!process.env.ALLOWED_WA_NUMBERS;
+  if (waEnabled) {
+    waModule = (() => { try { return require('./whatsapp'); } catch (e) { console.warn('[WA] whatsapp.js yüklenemedi:', e.message); return null; } })();
+    if (waModule) {
+      waModule.initWhatsApp({
+        telegramBot:    bot,
+        telegramChatId: CHAT_ID,
+
+        // Group message → record student activity (no agent response)
+        onGroupMessage: (phone, name, message, groupJid) => {
+          studentsModule?.recordActivity(phone, name, message, groupJid);
+        },
+
+        // Text message from WhatsApp → run through agent
+        onText: async (text, jid) => {
+          lastMessageAt   = Date.now();
+          inactivityFired = false;
+          await runAgentFromWA(text, jid);
+        },
+
+        // Image from WhatsApp → extract tasks, ask Telegram confirmation
+        onImage: async (buffer, caption, jid) => {
+          lastMessageAt   = Date.now();
+          inactivityFired = false;
+          send('⏳ WhatsApp görseli analiz ediliyor...');
+          const items = await extractTasksFromPhoto(buffer, caption).catch(() => []);
+          if (!items.length) {
+            send('❌ WhatsApp görselinde görev bulunamadı.');
+            waModule?.sendWA(jid, '❌ Görselde görev bulunamadı.').catch(() => {});
+            return;
+          }
+          const withTime    = items.filter(i => i.time && parseTime(i.time));
+          const withoutTime = items.filter(i => !i.time || !parseTime(i.time));
+          const added = [];
+          for (const item of withTime) {
+            const t = parseTime(item.time);
+            if (t && !slotTaken(t) && tasks.length < MAX_TASKS) added.push(addTask(item.title, t));
+          }
+          if (withoutTime.length && tasks.length < MAX_TASKS) {
+            const plan = await generateDailyPlan(withoutTime.map(i => i.title).join(', ')).catch(() => null);
+            if (plan) for (const b of plan) {
+              const t = parseTime(b.time);
+              if (t && !slotTaken(t) && tasks.length < MAX_TASKS) added.push(addTask(b.title, t));
+            }
+          }
+          const reply = added.length
+            ? '✅ WhatsApp görselinden eklendi:\n' + added.map(t => `${t.time} — ${t.title}`).join('\n')
+            : '❌ Görev eklenemedi (slot dolu veya limit aşıldı).';
+          send(reply);
+          waModule?.sendWA(jid, reply).catch(() => {});
+        },
+      }).catch(e => console.error('[WA] initWhatsApp hatası:', e.message));
+    }
   }
 })();

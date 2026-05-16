@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
-import { Key, Bell, Calendar, User, Trash2, Eye, EyeOff, Save, Loader2, CheckCircle2, Bot, Play, Square, RefreshCw, Link2, Link2Off } from 'lucide-react'
+import { Key, Bell, Calendar, Mail, MessageCircle, User, Trash2, Eye, EyeOff, Save, Loader2, CheckCircle2, Bot, Play, Square, RefreshCw, Link2, Link2Off } from 'lucide-react'
 import type { UserSettings } from '@/types'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -194,6 +194,258 @@ function GoogleCalendarSection() {
             <Link2 size={12} />
             Google ile Bağla
           </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function GmailSection() {
+  const searchParams = useSearchParams()
+  const gmailParam   = searchParams.get('gmail')
+  const gmailReason  = searchParams.get('reason')
+
+  const { data, mutate } = useSWR<{ connected: boolean; provider?: string; lastChecked?: string | null }>(
+    '/api/email/status',
+    fetcher,
+    { revalidateOnMount: true, revalidateOnFocus: true }
+  )
+  const [connecting, setConnecting]     = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  useEffect(() => {
+    if (gmailParam === 'connected') mutate()
+  }, [gmailParam, mutate])
+
+  async function connect() {
+    setConnecting(true)
+    try {
+      const res = await fetch('/api/email/auth')
+      const json = await res.json()
+      if (json.url) window.location.href = json.url
+    } catch {
+      setConnecting(false)
+    }
+  }
+
+  async function disconnect() {
+    setDisconnecting(true)
+    await fetch('/api/email/status', { method: 'DELETE' }).catch(() => {})
+    mutate({ connected: false }, false)
+    setDisconnecting(false)
+  }
+
+  const connected = data?.connected ?? false
+
+  return (
+    <div
+      className="rounded-2xl p-6"
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+      }}
+    >
+      <h2 className="text-white font-semibold text-sm mb-5 flex items-center gap-2">
+        <Mail size={15} className="text-zinc-400" />
+        Gmail
+      </h2>
+
+      {gmailParam === 'connected' && (
+        <p className="text-green-400 text-xs mb-3 px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: 'rgba(34,197,94,0.08)' }}>
+          <CheckCircle2 size={12} /> Gmail başarıyla bağlandı!
+        </p>
+      )}
+      {gmailParam === 'error' && (
+        <p className="text-red-400 text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.08)' }}>
+          Bağlantı hatası{gmailReason ? `: ${decodeURIComponent(gmailReason)}` : ''}
+        </p>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div>
+          {connected ? (
+            <p className="text-white text-sm flex items-center gap-1.5">
+              <CheckCircle2 size={13} className="text-green-400" />
+              Bağlandı
+            </p>
+          ) : (
+            <>
+              <p className="text-white text-sm">Bağlı değil</p>
+              <p className="text-zinc-500 text-xs mt-0.5">E-postalarınızı asistana analiz ettirin</p>
+            </>
+          )}
+        </div>
+
+        {connected ? (
+          <button
+            onClick={disconnect}
+            disabled={disconnecting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={{
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.2)',
+              color: '#f87171',
+            }}
+          >
+            {disconnecting ? <Loader2 size={12} className="animate-spin" /> : <><Link2Off size={12} /> Bağlantıyı Kes</>}
+          </button>
+        ) : (
+          <button
+            onClick={connect}
+            disabled={connecting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+            style={{
+              background: 'rgba(234,67,53,0.12)',
+              border: '1px solid rgba(234,67,53,0.25)',
+              color: '#f87171',
+            }}
+          >
+            {connecting ? <Loader2 size={12} className="animate-spin" /> : <><Link2 size={12} /> Gmail ile Bağla</>}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WhatsAppSection() {
+  const { data: botStatus } = useSWR('/api/bot', fetcher, { refreshInterval: 3000 })
+  const { data: waStatus, mutate: mutateWA } = useSWR<{
+    connected: boolean
+    phone: string
+    qrPending: boolean
+    qrCode?: string
+  }>(
+    '/api/bot/whatsapp-status',
+    fetcher,
+    { refreshInterval: 2000 }
+  )
+
+  const [loading, setLoading] = useState<'connect' | 'disconnect' | null>(null)
+  const [error, setError]     = useState('')
+
+  const botRunning  = botStatus?.running ?? false
+  const connected   = waStatus?.connected   ?? false
+  const qrPending   = waStatus?.qrPending   ?? false
+  const qrCode      = waStatus?.qrCode      ?? null
+  const phone       = waStatus?.phone       ?? ''
+
+  async function connect() {
+    setError('')
+    setLoading('connect')
+    try {
+      const res  = await fetch('/api/bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'wa-connect' }) })
+      const json = await res.json()
+      if (!json.ok) setError(json.error || 'Bağlantı başlatılamadı.')
+      mutateWA()
+    } catch { setError('Bağlantı hatası.') }
+    finally  { setLoading(null) }
+  }
+
+  async function disconnect() {
+    setError('')
+    setLoading('disconnect')
+    try {
+      const res  = await fetch('/api/bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'wa-disconnect' }) })
+      const json = await res.json()
+      if (!json.ok) setError(json.error || 'Bağlantı kesilemedi.')
+      mutateWA()
+    } catch { setError('Bağlantı hatası.') }
+    finally  { setLoading(null) }
+  }
+
+  return (
+    <div
+      className="rounded-2xl p-6"
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+      }}
+    >
+      <h2 className="text-white font-semibold text-sm mb-5 flex items-center gap-2">
+        <MessageCircle size={15} className="text-zinc-400" />
+        WhatsApp
+      </h2>
+
+      {!botRunning && (
+        <p className="text-yellow-400 text-xs mb-4 px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: 'rgba(234,179,8,0.08)' }}>
+          ⚠️ Bot çalışmıyor. Önce Telegram Botu başlatın.
+        </p>
+      )}
+
+      {error && (
+        <p className="text-red-400 text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.08)' }}>
+          {error}
+        </p>
+      )}
+
+      {/* QR code display */}
+      {qrPending && qrCode && (
+        <div className="mb-5 flex flex-col items-center gap-3">
+          <p className="text-zinc-300 text-xs text-center">
+            WhatsApp &rarr; Bağlı Cihazlar &rarr; Cihaz Ekle
+          </p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`data:image/png;base64,${qrCode}`}
+            alt="WhatsApp QR"
+            className="rounded-xl"
+            style={{ width: 220, height: 220, background: '#fff', padding: 8 }}
+          />
+          <div className="flex items-center gap-2 text-xs text-zinc-400">
+            <Loader2 size={11} className="animate-spin" />
+            QR bekleniyor…
+          </div>
+        </div>
+      )}
+
+      {qrPending && !qrCode && (
+        <div className="mb-5 flex items-center gap-2 text-xs text-zinc-400">
+          <Loader2 size={11} className="animate-spin" />
+          QR kodu hazırlanıyor…
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div>
+          {connected ? (
+            <>
+              <p className="text-white text-sm flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="text-green-400" />
+                Bağlandı
+              </p>
+              {phone && <p className="text-zinc-500 text-xs mt-0.5">+{phone}</p>}
+            </>
+          ) : (
+            <>
+              <p className="text-white text-sm">{qrPending ? 'QR bekleniyor…' : 'Bağlı değil'}</p>
+              {!qrPending && (
+                <p className="text-zinc-500 text-xs mt-0.5">WhatsApp grubundaki öğrencileri takip edin</p>
+              )}
+            </>
+          )}
+        </div>
+
+        {connected ? (
+          <button
+            onClick={disconnect}
+            disabled={loading !== null || !botRunning}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}
+          >
+            {loading === 'disconnect' ? <Loader2 size={12} className="animate-spin" /> : <><Link2Off size={12} /> Bağlantıyı Kes</>}
+          </button>
+        ) : (
+          <button
+            onClick={connect}
+            disabled={loading !== null || !botRunning || qrPending}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+            style={{ background: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.25)', color: '#4ade80' }}
+          >
+            {loading === 'connect' ? <Loader2 size={12} className="animate-spin" /> : <><Link2 size={12} /> WhatsApp Bağla</>}
+          </button>
         )}
       </div>
     </div>
@@ -589,6 +841,14 @@ export default function SettingsPage() {
         <Suspense fallback={null}>
           <GoogleCalendarSection />
         </Suspense>
+
+        {/* Gmail */}
+        <Suspense fallback={null}>
+          <GmailSection />
+        </Suspense>
+
+        {/* WhatsApp */}
+        <WhatsAppSection />
 
         {/* Telegram Bot */}
         <BotControl />

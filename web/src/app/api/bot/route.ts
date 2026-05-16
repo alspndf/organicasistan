@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { decrypt } from '@/lib/encryption'
-import { startBot, stopBot, getBotStatus } from '@/lib/bot-manager'
+import { startBot, stopBot, getBotStatus, sendBotCommand } from '@/lib/bot-manager'
 
 export async function GET() {
   const session = await auth()
@@ -66,6 +66,14 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json(startBot(env, session.user.id as string))
+  }
+
+  if (action === 'wa-connect') {
+    return NextResponse.json(sendBotCommand(session.user.id as string, 'WA_CONNECT'))
+  }
+
+  if (action === 'wa-disconnect') {
+    return NextResponse.json(sendBotCommand(session.user.id as string, 'WA_DISCONNECT'))
   }
 
   return NextResponse.json({ error: 'Geçersiz işlem.' }, { status: 400 })

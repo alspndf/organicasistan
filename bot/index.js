@@ -434,6 +434,35 @@ function fireTask(task) {
 const conversationHistory = [];
 const MAX_HISTORY = 20;  // keep more history since it's persisted
 
+// Remove orphaned tool_result blocks (no matching tool_use in previous assistant message)
+function sanitizeHistory(history) {
+  const validToolUseIds = new Set();
+  for (const msg of history) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'tool_use') validToolUseIds.add(block.id);
+      }
+    }
+  }
+  return history.filter(msg => {
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      const hasOrphan = msg.content.some(
+        b => b.type === 'tool_result' && !validToolUseIds.has(b.tool_use_id)
+      );
+      if (hasOrphan) return false;
+    }
+    return true;
+  });
+}
+
+function trimHistory() {
+  trimHistory();
+  // After trimming, remove any tool_result blocks whose tool_use was cut off
+  const cleaned = sanitizeHistory([...conversationHistory]);
+  conversationHistory.length = 0;
+  conversationHistory.push(...cleaned);
+}
+
 // Debounced history save — only writes to DB 3s after last change
 let _historySaveTimer = null;
 function scheduleSaveHistory() {
@@ -1414,7 +1443,7 @@ async function runAgentFromWA(text, jid) {
 
 async function runAgent(userText) {
   conversationHistory.push({ role: 'user', content: userText });
-  while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
+  trimHistory();
 
   const messages = [...conversationHistory];
 
@@ -1454,7 +1483,7 @@ async function runAgent(userText) {
           }
         }
         conversationHistory.push({ role: 'assistant', content: response.content });
-        while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
+        trimHistory();
         scheduleSaveHistory();
       }
       return;
@@ -1476,7 +1505,7 @@ async function runAgent(userText) {
     const toolResultMsg = { role: 'user', content: toolResults };
     messages.push(toolResultMsg);
     conversationHistory.push(toolResultMsg);
-    while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
+    trimHistory();
   }
 
   send(`Üzgünüm ${USER_NAME}, işlem tamamlanamadı. Tekrar dener misiniz?`);
@@ -2062,7 +2091,7 @@ console.log('[SYS] Sistem başlatılıyor...');
     try {
       const savedHistory = await dbAdapter.getConversationHistory();
       if (savedHistory && savedHistory.length) {
-        conversationHistory.push(...savedHistory);
+        conversationHistory.push(...sanitizeHistory(savedHistory));
         console.log(`[SYS] ${conversationHistory.length} mesaj geçmişi yüklendi.`);
       }
     } catch (e) {

@@ -27,7 +27,7 @@ const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
 const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
-const TZ             = process.env.BOT_TIMEZONE        || 'Europe/Istanbul';
+const TZ             = process.env.BOT_TIMEZONE        || 'Asia/Ho_Chi_Minh';
 const MODEL          = 'claude-sonnet-4-6';
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
@@ -39,10 +39,12 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const bot       = new TelegramBot(TOKEN, { polling: true });
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let tasks       = [];          // { id, title, time, status: 'pending'|'done' }
+let tasks       = [];          // { id, title, time, status: 'pending'|'done', postponeCount? }
 let routines    = [];          // { id, text, time } — loaded from DB on startup
 let idCounter   = 1;
 const firedKeys = new Set();   // prevent double-firing
+// Tracks unanswered completion checks: taskId → { sentAt, secondSent }
+const pendingCompletionChecks = new Map();
 let pendingReschedule          = null;  // task.id waiting for a new time from user
 let pendingDeleteIds           = [];    // task IDs awaiting delete confirmation
 let pendingAnalysisReschedule  = null;  // [{title,time}] incomplete tasks awaiting tomorrow confirm
@@ -63,7 +65,7 @@ const _pendingStudentMsgs = new Map(); // shortId → { phone, draft }
 const MAX_TASKS   = 9999;
 const TASK_MIN_M  = 30;   // minimum task block in minutes
 const TASK_MAX_M  = 90;   // maximum task block in minutes
-const PRE_REMIND  = 5;    // pre-reminder lead time in minutes
+const PRE_REMIND  = 10;   // pre-reminder lead time in minutes
 
 const DAY_KEYS    = ['pazar','pazartesi','salı','çarşamba','perşembe','cuma','cumartesi'];
 const DAY_LABELS  = { 0:'Pazar',1:'Pazartesi',2:'Salı',3:'Çarşamba',4:'Perşembe',5:'Cuma',6:'Cumartesi' };
@@ -420,12 +422,14 @@ function sendButtons(text, buttons) {
   });
 }
 
-function fireTask(task) {
+function fireCompletionCheck(task) {
+  pendingCompletionChecks.set(task.id, { sentAt: Date.now(), secondSent: false });
   return sendButtons(
-    `⏰ ${USER_NAME}, sıradaki göreviniz!\n\n📌 ${task.title}\n\nTamamladınız mı?`,
+    `${task.title} tamamlandı mı?`,
     [
-      { label: '✅ Yaptım',   data: `DONE:${task.id}` },
-      { label: '❌ Yapmadım', data: `NOTDONE:${task.id}` },
+      { label: '✅ Evet',   data: `DONE:${task.id}` },
+      { label: '❌ Hayır',  data: `NOTDONE:${task.id}` },
+      { label: '⏭ Ertele', data: `POSTPONE:2h:${task.id}` },
     ]
   );
 }
@@ -480,52 +484,54 @@ function scheduleSaveHistory() {
 function buildStaticSystem() {
   const mem = loadMemory();
 
-  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki, proaktif ve çok yeteneklisin.
+  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel icra asistanısın.
+Görevin günlük operasyonları yönetmek, önceliklendirmek ve hayatını kolaylaştırmak.
 
-## Yapabileceklerin (kullanıcı istemese bile proaktif öner)
-1. 🧠 Mesaj Yönetimi — yazdığı mesajları düzenler, kısaltır, profesyonelleştirir, cevap hazırlar
-2. 📅 Planlama & Takvim — günlük/haftalık plan oluşturur, hatırlatmalar kurar
-3. 🔔 Hatırlatma Sistemi — belirtilen zamanlarda görevleri hatırlatır
-4. 📂 Not & Bilgi Düzenleme — karışık notları düzenler, özetler, anlaşılır hale getirir
-5. 🔎 Hızlı Araştırma — basit konularda araştırma yapar, kısa net bilgi sunar
-6. 🧾 Metin Üretimi — caption, açıklama, başlık, kısa yazılar üretir
-7. 🌍 Çeviri — Türkçe, İngilizce ve diğer diller arasında çeviri yapar
-8. 🔄 Tekrar Eden İşleri Kolaylaştırma — sık yapılan işleri otomatikleştirir, template oluşturur
-9. 📊 Özetleme — uzun metinleri ve konuşmaları kısa özetler
-10. 🗂 Organizasyon — günlük işleri düzenler, öncelik sıralaması yapar
-11. ⚙️ Süreç Takibi — yapılması gereken işleri takip eder, eksikleri hatırlatır
-12. 🧠 Karar Destek — seçenekleri analiz eder, artı-eksi listesi çıkarır
-13. 🔑 Proaktif Hatırlatma — kullanıcı söylemese bile eksik/unutulan işleri fark edip hatırlatır
+## Temel Kurallar
+- Dil: Türkçe. Samimi ama profesyonel.
+- Kısa yaz. Telefonda kolayca taranabilecek uzunluk.
+- Liste değil, karar ver. "3 toplantın var" değil, "odak zamanın kısıtlı, şunu öne al" de.
+- Tek seferde tek soru sor. Cevabı al, devam et.
+- Emojileri işaret olarak kullan: 🔴 Kritik/Aksiyon, 🟡 Önemli/Bekleyebilir, ✅ Tamamlandı, ⏭ Ertelendi, 📅 Takvim, 📧 Mail
 
-## Davranış Kuralları
+## Zaman Dilimi
+UTC+7 (Vietnam / Ho Chi Minh). Tüm saatler bu zaman dilimine göre hesaplanır.
+Tarihten bahsederken her zaman açıkça belirt: "Bugün [Gün], [Tarih]..."
+
+## Öncelik Hiyerarşisi
+Deadline > Toplantı > Görev > Mail
+Çakışma veya sıkışma olduğunda bu sıraya göre yönlendir. Her zaman somut bir öneride bulun.
+
+## Araçlar ve Görev Yönetimi
 - Araçları kullanarak görevleri gerçek olarak yönet, sadece söz verme
-- Türkçe konuş, doğal ve samimi ol
-- Zaman hakkında konuşurken get_current_time aracını kullan — tahmin etme, ölç
-- Konuşma geçmişini ve ${USER_NAME} hakkında öğrendiklerini her zaman hatırla
-- Proaktif ol: günün durumuna göre öneriler sun, eksik gördüğün şeyleri belirt
 - Görevi silmeden önce onay iste (delete_tasks confirmed:false ile)
-- Bir görevi birden fazla şekilde tanımla: saat, numara veya anahtar kelime
-- ${USER_NAME}'e saygılı ve motive edici ol
-- Onboarding sırasında öğrenilen bilgileri save_memory ile kaydet`;
+- Takvim işlemleri için get_calendar_events / add_calendar_event kullan
+- E-posta analizi için analyze_emails kullan
+- Zaman için get_current_time kullan — tahmin etme, ölç
+
+## Öğrenilen Bilgiler`;
 
   if (mem.rules.length) {
-    sys += `\n\n## ${USER_NAME} Hakkında Öğrendiklerin\n${mem.rules.join('\n')}`;
+    sys += `\n${mem.rules.join('\n')}`;
+  } else {
+    sys += `\nHenüz kişisel bilgi kaydedilmedi.`;
   }
+
   if (routines.length) {
-    sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
+    sys += `\n\n## Kayıtlı Rutinler\n` + routines.map(r =>
       `- ${r.time ? `${r.time} — ` : ''}${r.text}`
     ).join('\n');
   }
 
-  // Erteleme pattern uyarıları — Claude'un proaktif olması için
+  // Erteleme uyarıları
   if (mem.postpone_patterns) {
     const top = Object.entries(mem.postpone_patterns)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 3)
       .filter(([, v]) => v >= 2);
     if (top.length) {
-      sys += `\n\n## Erteleme Uyarıları\n` +
-        top.map(([k, v]) => `- "${k}" başlıklı görevler ${v} kez ertelendi → teşvik edici ve anlayışlı ol`).join('\n');
+      sys += `\n\n## Sık Ertelenenler\n` +
+        top.map(([k, v]) => `- "${k}" ${v}x ertelendi`).join('\n');
     }
   }
 
@@ -534,7 +540,7 @@ function buildStaticSystem() {
     const active = Object.entries(mem.habits).filter(([, h]) => h.streak > 0);
     if (active.length) {
       sys += `\n\n## Aktif Alışkanlık Serileri\n` +
-        active.map(([k, h]) => `- ${k}: ${h.streak} günlük seri (toplam ${h.total})`).join('\n');
+        active.map(([k, h]) => `- ${k}: ${h.streak} gün`).join('\n');
     }
   }
 
@@ -560,21 +566,22 @@ function buildDynamicContext() {
   const ydayTotal  = statsYday.done + statsYday.skipped + statsYday.postponed;
   const ydayRate   = ydayTotal ? Math.round(statsYday.done / ydayTotal * 100) : null;
 
-  let ctx = `## Anlık Durum
-Tarih: ${todayDate} (${dayName}) | Saat: ${current} (${TZ})
-Bekleyen görev: ${pending}
-Bugün tamamlanan: ${statsToday.done} | Ertelenen: ${statsToday.postponed}
-${ydayRate !== null ? `Dün tamamlama oranı: %${ydayRate} (${statsYday.done}/${ydayTotal})` : ''}
-${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
+  let ctx = `## Anlık Durum (UTC+7)
+Bugün: ${dayName}, ${todayDate} | Saat: ${current}
+Bekleyen: ${pending} | Tamamlanan: ${statsToday.done} | Ertelenen: ${statsToday.postponed}
+${ydayRate !== null ? `Dün: %${ydayRate} (${statsYday.done}/${ydayTotal})` : ''}
+${pendingReschedule ? `⚠️ Erteleme bekliyor: görev ID ${pendingReschedule}` : ''}
 
 ## Bugünkü Görevler
 ${taskList}`;
 
-  if (dayItems.length) {
-    ctx += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
-  }
   if (mem.calendar_today && mem.calendar_today.length) {
-    ctx += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
+    ctx += `\n\n## Takvim (Bugün)
+timeMin: bugün 00:00 UTC+7 | timeMax: bugün 23:59 UTC+7\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
+  }
+
+  if (dayItems.length) {
+    ctx += `\n\n## Hafıza (${dayName})\n${dayItems.join(', ')}`;
   }
 
   return ctx;
@@ -1514,21 +1521,40 @@ setInterval(() => {
   const now = nowHH();
 
   for (const task of tasks.filter(t => t.status === 'pending')) {
-    // Pre-reminder
+    // 10 min pre-reminder
     const preKey = `pre:${task.id}:${task.time}`;
     if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
       firedKeys.add(preKey);
-      send(`⏳ ${USER_NAME}, 5 dakika sonra: ${task.title} 🔔`);
+      send(`${task.time} → ${task.title} — 10 dakikan var.`);
       console.log(`[PRE] ${task.title}`);
     }
 
-    // Task fire
+    // Completion check 10 min after task time
     const fireKey = `fire:${task.id}:${task.time}`;
-    if (!firedKeys.has(fireKey) && now === task.time) {
+    if (!firedKeys.has(fireKey) && now === addMins(task.time, 10)) {
       firedKeys.add(fireKey);
       console.log(`[FIRE] ${task.title} (${task.time})`);
-      fireTask(task);
+      fireCompletionCheck(task);
     }
+  }
+
+  // Second-chance completion check: re-ask after 20 min of no response
+  const twentyMin = 20 * 60 * 1000;
+  for (const [taskId, info] of pendingCompletionChecks) {
+    if (info.secondSent) continue;
+    if (Date.now() - info.sentAt < twentyMin) continue;
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'pending') { pendingCompletionChecks.delete(taskId); continue; }
+    info.secondSent = true;
+    sendButtons(
+      `${task.title} tamamlandı mı?`,
+      [
+        { label: '✅ Evet',   data: `DONE:${task.id}` },
+        { label: '❌ Hayır',  data: `NOTDONE:${task.id}` },
+        { label: '⏭ Ertele', data: `POSTPONE:2h:${task.id}` },
+      ]
+    );
+    console.log(`[FIRE2] İkinci hatırlatma: ${task.title}`);
   }
 }, 30_000);
 
@@ -1580,8 +1606,11 @@ bot.on('callback_query', async query => {
     if (task) {
       task.status = 'done';
       pendingReschedule = null;
+      pendingCompletionChecks.delete(task.id);
       dbAdapter?.updateTaskStatus(task.id, 'done');
-      send(`✅ Süper ${USER_NAME}, aferin! 🎉\n${task.title} tamamlandı.`);
+      const habitResult = updateHabitStreak(task.title, true);
+      const habitMsg    = habitMilestoneMsg(habitResult);
+      send(`✅ ${task.title} tamamlandı.${habitMsg}`);
       console.log(`[DONE] ${task.title}`);
     }
     return;
@@ -1592,14 +1621,41 @@ bot.on('callback_query', async query => {
     const task   = tasks.find(t => t.id === taskId);
     if (task) {
       pendingReschedule = task.id;
+      pendingCompletionChecks.delete(taskId);
+      task.postponeCount = (task.postponeCount || 0) + 1;
+      recordDailyPostponed(task.title);
       // Check habit streak break
       const habitResult = updateHabitStreak(task.title, false);
       if (habitResult?.broken) {
         send(habitMilestoneMsg(habitResult).trim());
       }
-      // Smart postpone: 3 options
+
+      // Postpone count warnings per spec
+      if (task.postponeCount === 2) {
+        bot.sendMessage(CHAT_ID,
+          `🔴 "${task.title}" bugün 2 kez ertelendi.\nYarına mı taşıyalım?`,
+          { reply_markup: { inline_keyboard: [[
+            { text: '🌙 Yarına taşı', callback_data: `POSTPONE:tomorrow:${taskId}` },
+            { text: '🕐 2 saat sonra', callback_data: `POSTPONE:2h:${taskId}` },
+          ]] } }
+        );
+        return;
+      }
+      if (task.postponeCount >= 3) {
+        bot.sendMessage(CHAT_ID,
+          `🔴 "${task.title}" 3 kez ertelendi.\nNe yapalım?`,
+          { reply_markup: { inline_keyboard: [
+            [{ text: '🌙 Yarına taşı', callback_data: `POSTPONE:tomorrow:${taskId}` }],
+            [{ text: '🗑 Sil',          callback_data: `DELETE_TASK:${taskId}` }],
+            [{ text: '📤 Devret',       callback_data: `POSTPONE:reason:${taskId}` }],
+          ] } }
+        );
+        return;
+      }
+
+      // Default: smart postpone 3 options
       bot.sendMessage(CHAT_ID,
-        `Sorun değil ${USER_NAME} 😊\n\n📌 ${task.title}\n\nNe yapalım?`,
+        `📌 ${task.title}\n\nNe yapalım?`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -1629,11 +1685,11 @@ bot.on('callback_query', async query => {
           const old = task.time;
           firedKeys.delete(`fire:${task.id}:${old}`);
           firedKeys.delete(`pre:${task.id}:${old}`);
+          pendingCompletionChecks.delete(task.id);
           task.time = newTime;
           dbAdapter?.syncTask(task);
-          recordDailyPostponed(task.title);
           pendingReschedule = null;
-          send(`⏰ "${task.title}" → ${newTime} saatine taşındı.`);
+          send(`⏭ "${task.title}" → ${newTime}`);
           console.log(`[POSTPONE] 2h: ${task.title} → ${newTime}`);
         } else {
           send(`❌ ${newTime} saatinde başka görev var. Farklı bir saat yazın:`);
@@ -1649,11 +1705,11 @@ bot.on('callback_query', async query => {
         const tomorrowStr = tomorrow.toLocaleDateString('sv-SE', { timeZone: TZ });
         const newId       = `t${idCounter++}`;
         dbAdapter?.syncTask({ id: newId, title: task.title, time: task.time, status: 'pending', ...(task.project ? { project: task.project } : {}) }, tomorrowStr);
-        task.status = 'done'; // mark as handled today (not re-shown tonight)
+        task.status = 'done';
         dbAdapter?.updateTaskStatus(task.id, 'done');
         pendingReschedule = null;
-        recordDailyPostponed(task.title);
-        send(`🌙 "${task.title}" yarına (${task.time}) taşındı.`);
+        pendingCompletionChecks.delete(task.id);
+        send(`⏭ "${task.title}" yarına (${task.time}) taşındı.`);
         console.log(`[POSTPONE] tomorrow: ${task.title}`);
       }
       return;
@@ -1701,6 +1757,22 @@ bot.on('callback_query', async query => {
     if (task) pendingReschedule = task.id;
     send(`📝 Neden kaydedildi: "${reasonText}".\n${task ? 'Kaça taşıyalım? Saati yazın.' : ''}`);
     console.log(`[REASON] ${task?.title || taskId}: ${reasonText}`);
+    return;
+  }
+
+  // ── Quick task delete (from postpone-3x flow) ─────────────────────────────
+  if (data.startsWith('DELETE_TASK:')) {
+    const taskId = data.slice('DELETE_TASK:'.length);
+    const idx    = tasks.findIndex(t => t.id === taskId);
+    if (idx !== -1) {
+      const title = tasks[idx].title;
+      tasks.splice(idx, 1);
+      pendingCompletionChecks.delete(taskId);
+      pendingReschedule = null;
+      dbAdapter?.deleteTask?.(taskId);
+      send(`🗑 "${title}" silindi.`);
+      console.log(`[DELETE] ${title}`);
+    }
     return;
   }
 });
@@ -1822,84 +1894,82 @@ rl.on('line', async (line) => {
   }
 });
 
-// ─── Cron: 08:00 — smart morning briefing ────────────────────────────────────
-cron.schedule('0 8 * * *', async () => {
-  console.log('[CRON] 08:00 akıllı brifing başlatılıyor...');
+// ─── Cron: 07:30 — morning briefing ──────────────────────────────────────────
+cron.schedule('30 7 * * *', async () => {
+  console.log('[CRON] 07:30 sabah brifing başlatılıyor...');
   try {
-    const dayName   = DAY_LABELS[todayDayIndex()] || '';
-    const mem       = loadMemory();
-    const dayItems  = mem.weekly_schedule[todayKey()] || [];
-    const pending   = pendingTasks();
+    const dayName    = DAY_LABELS[todayDayIndex()] || '';
+    const todayDate  = todayISO();
+    const mem        = loadMemory();
+    const calEvents  = mem.calendar_today || [];
+    const pending    = pendingTasks();
 
-    // Weather
-    const weather   = await getWeather();
-    const weatherTxt = weather
-      ? `${weather.desc}, ${weather.temp}°C, rüzgar ${weather.wind} km/s`
-      : 'hava durumu alınamadı';
-
-    // Stats
-    const today     = todayISO();
-    const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0];
+    // Yesterday's stats
+    const yesterday = new Date(new Date(todayDate).getTime() - 86400000).toISOString().split('T')[0];
     const ystStats  = getStatsForDate(yesterday);
-    const ystTotal  = ystStats.done + ystStats.skipped;
-    const ystRate   = ystTotal ? Math.round(ystStats.done / ystTotal * 100) : null;
-    const weekly    = getWeeklyStats();
+    const ystTotal  = ystStats.done + ystStats.skipped + ystStats.postponed;
 
-    // Postpone warnings
-    const patterns  = mem.postpone_patterns || {};
-    const topPostpone = Object.entries(patterns)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([k, v]) => `${k} (${v}x)`)
-      .join(', ');
-
-    // Active habit streaks
-    const habits    = mem.habits || {};
-    const activeStreaks = Object.entries(habits)
-      .filter(([, h]) => h.streak > 0)
-      .map(([name, h]) => `${name}: ${h.streak} gün`)
-      .join(', ');
+    // Deferred tasks from yesterday (tasks still pending that were added before today)
+    const deferred  = pending.filter(t => {
+      const addedDate = t.addedDate;
+      return addedDate && addedDate < todayDate;
+    });
 
     // Build context for Claude
-    const contextLines = [
-      `Bugün: ${dayName}`,
-      `Hava: ${weatherTxt}`,
-      ystRate !== null ? `Dün tamamlama: %${ystRate} (${ystStats.done}/${ystTotal})` : 'Dün: veri yok',
-      `Bu hafta ortalama: %${weekly.rate} (${weekly.done} görev tamamlandı)`,
+    const ctx = [
+      `Bugün: ${dayName}, ${todayDate} (UTC+7)`,
+      ystTotal ? `Dün: ${ystStats.done}/${ystTotal} görev tamamlandı` : 'Dün: veri yok',
     ];
-    if (topPostpone)    contextLines.push(`En çok ertelenen: ${topPostpone}`);
-    if (activeStreaks)  contextLines.push(`Aktif seriler: ${activeStreaks}`);
-    if (dayItems.length) contextLines.push(`Hafıza: ${dayItems.join(', ')}`);
+    if (calEvents.length) {
+      ctx.push(`\nTakvim (${calEvents.length} etkinlik):`);
+      calEvents.forEach(e => ctx.push(`  ${e}`));
+    }
     if (pending.length) {
-      contextLines.push(`\nBugünkü ${pending.length} görev:`);
-      pending.forEach(t => contextLines.push(`  ${t.time} — ${t.title}`));
+      ctx.push(`\nGörevler (${pending.length}):`);
+      pending.forEach(t => ctx.push(`  ${t.time} — ${t.title}`));
     } else {
-      contextLines.push('Bugün henüz görev yok.');
+      ctx.push('Bugün görev yok.');
+    }
+    if (deferred.length) {
+      ctx.push(`\nDünden devredenler: ${deferred.map(t => t.title).join(', ')}`);
     }
 
+    // Ask Claude to generate the morning briefing in the exact format
     let briefing;
     try {
       const r = await anthropic.messages.create({
-        model: MODEL, max_tokens: 400,
-        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Sabah brifing mesajı yaz: kısa (3-4 cümle), samimi, motive edici. İstatistiklere ve hava durumuna göre özelleştir. Türkçe yaz.`,
-        messages: [{
-          role: 'user',
-          content: contextLines.join('\n') + '\n\nBu bilgileri kullanarak kişiselleştirilmiş, motive edici bir sabah mesajı yaz.',
-        }],
+        model: MODEL, max_tokens: 600,
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel icra asistanısın. Sabah brifingini tam olarak aşağıdaki formatta üret (Türkçe, kısa, telefonda taranabilecek uzunlukta):
+
+Günaydın. Bugün [Gün], [Tarih].
+[Günün tek cümlelik özeti — yoğunluk ve kritiklik]
+
+⚡ BUGÜN KAZANMAN GEREKEN 3 ŞEY
+1. ...
+2. ...
+3. ...
+
+📅 TAKVİM
+[SS:DD] – [Başlık] ([Süre])
+(yoksa bu bölümü atla)
+
+📌 DÜNDEN DEVREDENLER
+[varsa listele + önerilen slot]
+(yoksa bu bölümü atla)
+
+📧 MAİLLER
+(e-posta analizi yoksa bu bölümü atla)
+
+Öncelik hiyerarşisi: Deadline > Toplantı > Görev > Mail. Karar ver, liste yapma.`,
+        messages: [{ role: 'user', content: ctx.join('\n') }],
       });
       briefing = r.content[0].text.trim();
     } catch {
-      briefing = `Günaydın ${USER_NAME}! ${weatherTxt}. ${pending.length ? `Bugün ${pending.length} görevin var.` : 'Henüz görev eklenmemiş.'}`;
+      briefing = `Günaydın. Bugün ${dayName}, ${todayDate}.\n\n⚡ BUGÜN KAZANMAN GEREKEN 3 ŞEY\n${pending.slice(0, 3).map((t, i) => `${i + 1}. ${t.time} — ${t.title}`).join('\n') || '1. Görev ekle'}`;
     }
 
-    const lines = [`🌅 *Günaydın, ${USER_NAME}!*\n`, briefing];
-    if (pending.length) {
-      lines.push(`\n📋 *Bugünkü görevler:*`);
-      pending.forEach(t => lines.push(`⏳ ${t.time} — ${t.title}`));
-    }
-
-    notifyAll(lines.join('\n'));
-    console.log('[CRON] 08:00 brifing gönderildi.');
+    notifyAll(briefing);
+    console.log('[CRON] 07:30 brifing gönderildi.');
 
     // ── Student follow-up analysis (runs after main briefing) ──────────────
     if (studentsModule) {
@@ -1966,15 +2036,98 @@ cron.schedule('0 8 * * *', async () => {
       }
     }
   } catch (e) {
-    console.error('[CRON] 08:00 brifing hatası:', e.message);
+    console.error('[CRON] 07:30 brifing hatası:', e.message);
   }
 }, { timezone: TZ });
 
-// ─── Cron: 11:00 — email summary ─────────────────────────────────────────────
-cron.schedule('0 11 * * *', () => {
-  console.log('[CRON] 11:00 e-posta özeti başlatılıyor...');
-  runAgent('E-postalarımı analiz et, önemli ve aksiyon gerektirenleri özetle.')
-    .catch(e => console.error('[CRON] 11:00 e-posta hatası:', e.message));
+// ─── Cron: 13:00 — midday check ──────────────────────────────────────────────
+cron.schedule('0 13 * * *', async () => {
+  console.log('[CRON] 13:00 öğle kontrolü...');
+  try {
+    const done    = tasks.filter(t => t.status === 'done').length;
+    const total   = tasks.length;
+    const crits   = pendingTasks().slice(0, 2);
+
+    const lines = [`📊 Günün yarısı.`, ``, `Tamamlanan: ${done} / ${total} görev`];
+    if (crits.length) lines.push(`Kalan kritik: ${crits.map(t => `${t.time} ${t.title}`).join(', ')}`);
+
+    // Check if any upcoming task needs prep time
+    const now  = nowHH();
+    const soon = pendingTasks().find(t => {
+      const diff = toMinutes(t.time) - toMinutes(now);
+      return diff > 0 && diff <= 90;
+    });
+    if (soon) {
+      const diff = toMinutes(soon.time) - toMinutes(now);
+      if (diff >= 25) lines.push(``, `📅 ${soon.time} için ${diff} dakikan var — hazırlık gerekiyorsa şimdi başla.`);
+    }
+
+    notifyAll(lines.join('\n'));
+  } catch (e) {
+    console.error('[CRON] 13:00 hatası:', e.message);
+  }
+}, { timezone: TZ });
+
+// ─── Cron: 18:30 — evening close ─────────────────────────────────────────────
+cron.schedule('30 18 * * *', async () => {
+  console.log('[CRON] 18:30 akşam kapanışı...');
+  try {
+    updateDailyEODStats();
+    const done    = tasks.filter(t => t.status === 'done');
+    const pending = pendingTasks();
+
+    // Tomorrow's tasks (from DB if available)
+    const tomorrow    = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toLocaleDateString('sv-SE', { timeZone: TZ });
+    const tomorrowTasks = (dbAdapter?.getTasksForDate?.(tomorrowStr) || []).slice(0, 3);
+
+    // Move pending tasks to tomorrow
+    const moved = [];
+    for (const t of pending) {
+      moved.push(`– ${t.title} → Yarın ${t.time}'e aldım`);
+    }
+
+    // Build context for Claude
+    const ctx = [
+      `Bugün tamamlanan: ${done.length}`,
+      pending.length ? `Tamamlanmayan: ${pending.map(t => t.title).join(', ')}` : '',
+      tomorrowTasks.length ? `Yarın: ${tomorrowTasks.map(t => `${t.time} ${t.title}`).join(', ')}` : '',
+    ].filter(Boolean);
+
+    let msg;
+    try {
+      const r = await anthropic.messages.create({
+        model: MODEL, max_tokens: 500,
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel icra asistanısın. Akşam kapanış mesajını tam olarak bu formatta üret (Türkçe, kısa):
+
+🌙 Bugünün özeti.
+
+✅ Tamamlanan: X görev
+⏭ Yarına taşınan:
+  – [Görev] → Yarın [SS:DD]'e aldım
+(taşınan yoksa bu satırları atla)
+
+📅 YARIN'IN İLK 3 ÖNCELİĞİ
+1. ...
+2. ...
+3. ...
+
+İyi akşamlar.
+
+Yarının önceliklerini bugünün bitmeyenlerine ve takvime göre belirle.`,
+        messages: [{ role: 'user', content: ctx.join('\n') }],
+      });
+      msg = r.content[0].text.trim();
+    } catch {
+      msg = `🌙 Bugünün özeti.\n\n✅ Tamamlanan: ${done.length} görev${moved.length ? '\n⏭ Yarına taşınan:\n' + moved.join('\n') : ''}\n\nİyi akşamlar.`;
+    }
+
+    notifyAll(msg);
+    console.log('[CRON] 18:30 kapanış gönderildi.');
+  } catch (e) {
+    console.error('[CRON] 18:30 hatası:', e.message);
+  }
 }, { timezone: TZ });
 
 // ─── Cron: Pazar 21:00 — weekly summary ──────────────────────────────────────

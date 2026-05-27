@@ -1931,38 +1931,74 @@ cron.schedule('30 7 * * *', async () => {
       ctx.push(`\nDünden devredenler: ${deferred.map(t => t.title).join(', ')}`);
     }
 
-    // Ask Claude to generate the morning briefing in the exact format
+    // Build template variables
+    const tplTarih    = `${dayName}, ${todayDate}`;
+    const tplTakvim   = calEvents.length
+      ? calEvents.join('\n')
+      : 'Takvimde etkinlik yok.';
+    const tplErtelenen = deferred.length
+      ? deferred.map(t => `${t.time} — ${t.title}`).join('\n')
+      : 'Yok.';
+
+    const userPrompt =
+`Bugünün tarihi: ${tplTarih}
+Takvim verisi: ${tplTakvim}
+Dünden ertelenen: ${tplErtelenen}
+
+Şu kurallara göre sabah mesajını yaz:
+
+1. İlk satır sadece:
+   "Günaydın Alp. [Gün], [Tarih]."
+
+2. İkinci satır tek cümle özet.
+   Sadece o günün verisine dayan.
+   Hava durumu, motivasyon, "haydi başlayalım" yazma.
+
+3. Görevleri saat sırasıyla listele.
+   Aynı saatte birden fazla varsa:
+   Uzun süreli = ana blok
+   Kısa süreli = o bloğun altına ↳ ile yaz
+   Çakışıyor deme.
+
+4. Dünden ertelenen görev varsa boş slota yerleştir,
+   "X görevi [saat]'e aldım" diye bildir.
+   Yoksa hiç yazma.
+
+5. En sona bugün kazanılması gereken 3 şeyi yaz.
+   Spesifik çıktı olsun, genel tavsiye değil.
+
+6. Gerçekten kritik bir şey yoksa uyarı yazma.
+
+ÇIKTI FORMAT:
+Günaydın Alp. [Gün], [Tarih].
+[Tek cümle özet]
+
+BUGÜNÜN PLANI
+[SS:DD] — [Görev]
+[SS:DD] — [Görev]
+  ↳ [Alt görev]
+
+BUGÜN KAZANMAN GEREKEN 3 ŞEY
+1.
+2.
+3.`;
+
     let briefing;
     try {
       const r = await anthropic.messages.create({
         model: MODEL, max_tokens: 600,
-        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel icra asistanısın. Sabah brifingini tam olarak aşağıdaki formatta üret (Türkçe, kısa, telefonda taranabilecek uzunlukta):
-
-Günaydın. Bugün [Gün], [Tarih].
-[Günün tek cümlelik özeti — yoğunluk ve kritiklik]
-
-⚡ BUGÜN KAZANMAN GEREKEN 3 ŞEY
-1. ...
-2. ...
-3. ...
-
-📅 TAKVİM
-[SS:DD] – [Başlık] ([Süre])
-(yoksa bu bölümü atla)
-
-📌 DÜNDEN DEVREDENLER
-[varsa listele + önerilen slot]
-(yoksa bu bölümü atla)
-
-📧 MAİLLER
-(e-posta analizi yoksa bu bölümü atla)
-
-Öncelik hiyerarşisi: Deadline > Toplantı > Görev > Mail. Karar ver, liste yapma.`,
-        messages: [{ role: 'user', content: ctx.join('\n') }],
+        system: `Sen Alp'in icra asistanısın. Adın Yeliz.
+Zaman dilimi: UTC+7 (Vietnam - Ho Chi Minh City).
+Kısa yaz. Motivasyon yok. Gerçek var.
+Emojileri işaret olarak kullan, dekorasyon olarak değil.
+Markdown kullanma. Yıldız, diyez, kalın yazı yok.
+Düz metin yaz, Telegram'da bozulmasın.`,
+        messages: [{ role: 'user', content: userPrompt }],
       });
       briefing = r.content[0].text.trim();
     } catch {
-      briefing = `Günaydın. Bugün ${dayName}, ${todayDate}.\n\n⚡ BUGÜN KAZANMAN GEREKEN 3 ŞEY\n${pending.slice(0, 3).map((t, i) => `${i + 1}. ${t.time} — ${t.title}`).join('\n') || '1. Görev ekle'}`;
+      const planLines = pending.slice(0, 5).map(t => `${t.time} — ${t.title}`).join('\n') || 'Görev yok.';
+      briefing = `Günaydın Alp. ${tplTarih}.\nGörevler yükleniyor.\n\nBUGÜNÜN PLANI\n${planLines}\n\nBUGÜN KAZANMAN GEREKEN 3 ŞEY\n1.\n2.\n3.`;
     }
 
     notifyAll(briefing);

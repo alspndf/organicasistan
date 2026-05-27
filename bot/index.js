@@ -48,8 +48,7 @@ const pendingCompletionChecks = new Map();
 let pendingReschedule          = null;  // task.id waiting for a new time from user
 let pendingDeleteIds           = [];    // task IDs awaiting delete confirmation
 let pendingAnalysisReschedule  = null;  // [{title,time}] incomplete tasks awaiting tomorrow confirm
-let lastMessageAt = Date.now(); // inactivity tracking
-let inactivityFired = false;    // prevent repeated pings per silence window
+let lastMessageAt = Date.now(); // used for conversation tracking
 
 // WhatsApp state
 let waModule              = null;  // loaded lazily if WA is enabled
@@ -1794,7 +1793,6 @@ bot.on('voice', async msg => {
   }
   send(`📝 Anladım: "${text}"`);
   lastMessageAt   = Date.now();
-  inactivityFired = false;
   await runAgent(text);
 });
 
@@ -1811,7 +1809,6 @@ bot.on('message', async msg => {
 
   // Reset inactivity on every message
   lastMessageAt   = Date.now();
-  inactivityFired = false;
 
   // ── Analysis reschedule intercept ─────────────────────────────────────────
   if (pendingAnalysisReschedule) {
@@ -2130,84 +2127,6 @@ Yarının önceliklerini bugünün bitmeyenlerine ve takvime göre belirle.`,
   }
 }, { timezone: TZ });
 
-// ─── Cron: Pazar 21:00 — weekly summary ──────────────────────────────────────
-cron.schedule('0 21 * * 0', async () => {
-  console.log('[CRON] Pazar 21:00 haftalık özet başlatılıyor...');
-  try {
-    const weekly    = getWeeklyStats();
-    const mem       = loadMemory();
-
-    // Top postponed categories
-    const patterns  = mem.postpone_patterns || {};
-    const topPostpone = Object.entries(patterns)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([k, v]) => `${k} (${v}x)`)
-      .join(', ');
-
-    // Active habit streaks
-    const habits    = mem.habits || {};
-    const activeStreaks = Object.entries(habits)
-      .filter(([, h]) => h.streak > 0)
-      .sort((a, b) => b[1].streak - a[1].streak)
-      .map(([name, h]) => `${name}: ${h.streak} gün`)
-      .join(', ');
-
-    const contextLines = [
-      `Haftalık özet (son 7 gün):`,
-      `- Tamamlanan görevler: ${weekly.done}`,
-      `- Atlanan görevler: ${weekly.skipped}`,
-      `- Ertelenen görevler: ${weekly.postponed}`,
-      `- Tamamlama oranı: %${weekly.rate}`,
-    ];
-    if (topPostpone)   contextLines.push(`En çok ertelenen kategoriler: ${topPostpone}`);
-    if (activeStreaks) contextLines.push(`Aktif alışkanlık serileri: ${activeStreaks}`);
-
-    let summary;
-    try {
-      const r = await anthropic.messages.create({
-        model: MODEL, max_tokens: 500,
-        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Haftalık motivasyon özeti yaz: samimi, içten, 4-5 cümle. Başarıları kutla, iyileştirme alanlarını nazikçe belirt. Türkçe yaz.`,
-        messages: [{
-          role: 'user',
-          content: contextLines.join('\n') + '\n\nBu istatistiklere göre motive edici bir haftalık özet yaz.',
-        }],
-      });
-      summary = r.content[0].text.trim();
-    } catch {
-      summary = weekly.rate >= 70
-        ? `${USER_NAME}, bu hafta harika bir performans gösterdiniz! %${weekly.rate} tamamlama oranıyla ${weekly.done} görev tamamladınız. 🎉`
-        : `${USER_NAME}, bu hafta ${weekly.done} görev tamamladınız. Önümüzdeki hafta daha da iyi olacak! 💪`;
-    }
-
-    const lines = [`📊 *Haftalık Özet*\n`, summary, `\n📈 Bu hafta: ${weekly.done} tamamlandı • ${weekly.skipped} atlandı • ${weekly.postponed} ertelendi (%${weekly.rate})`];
-    if (activeStreaks) lines.push(`🔥 Aktif seriler: ${activeStreaks}`);
-
-    notifyAll(lines.join('\n'));
-    console.log('[CRON] Pazar haftalık özet gönderildi.');
-  } catch (e) {
-    console.error('[CRON] Haftalık özet hatası:', e.message);
-  }
-}, { timezone: TZ });
-
-// ─── Inactivity check (every 10 min, fires after 90 min silence) ─────────────
-const INACTIVITY_MS = 90 * 60 * 1000; // 90 minutes
-
-const INACTIVITY_MESSAGES = [
-  `${USER_NAME}, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?`,
-  `${USER_NAME}, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?`,
-  `${USER_NAME}? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?`,
-  `${USER_NAME}, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!`,
-];
-
-setInterval(() => {
-  if (!inactivityFired && Date.now() - lastMessageAt >= INACTIVITY_MS) {
-    inactivityFired = true;
-    const msg = INACTIVITY_MESSAGES[Math.floor(Math.random() * INACTIVITY_MESSAGES.length)];
-    send(msg);
-    console.log('[INACTIVITY] Uyarı gönderildi.');
-  }
-}, 10 * 60 * 1000); // check every 10 minutes
 
 // ─── DB Adapter (optional — zero-impact if absent) ───────────────────────────
 const dbAdapter = (() => { try { return require('./db-adapter'); } catch { return null; } })();
@@ -2324,14 +2243,12 @@ Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
         // Text message from WhatsApp → run through agent
         onText: async (text, jid) => {
           lastMessageAt   = Date.now();
-          inactivityFired = false;
           await runAgentFromWA(text, jid);
         },
 
         // Image from WhatsApp → extract tasks, ask Telegram confirmation
         onImage: async (buffer, caption, jid) => {
           lastMessageAt   = Date.now();
-          inactivityFired = false;
           send('⏳ WhatsApp görseli analiz ediliyor...');
           const items = await extractTasksFromPhoto(buffer, caption).catch(() => []);
           if (!items.length) {

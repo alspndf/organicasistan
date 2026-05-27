@@ -324,6 +324,51 @@ async function getWeather() {
   });
 }
 
+// ─── Google Sheets: kişi bağlamı ─────────────────────────────────────────────
+const SHEETS_ID = process.env.SHEETS_ID || '1DW3bbhhbBrC6VSohdskedhb_iVDI-VJO_FOjB1nRAkc';
+
+async function getPersonContext(attendeeNames) {
+  const saEmail = process.env.GOOGLE_SA_EMAIL;
+  const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  if (!saEmail || !saKey) {
+    console.warn('[SHEETS] GOOGLE_SA_EMAIL veya GOOGLE_SA_PRIVATE_KEY eksik.');
+    return 'YOK';
+  }
+  const names = (attendeeNames || []).map(n => n.trim()).filter(Boolean);
+  if (!names.length) return 'YOK';
+
+  try {
+    const { google } = require('googleapis');
+    const auth = new google.auth.JWT(saEmail, null, saKey, [
+      'https://www.googleapis.com/auth/spreadsheets.readonly',
+    ]);
+    const sheets = google.sheets({ version: 'v4', auth });
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEETS_ID,
+      range: 'KİŞİLER!A:H',
+    });
+
+    const rows = res.data.values || [];
+    // skip header row if first cell looks like a label
+    const dataRows = rows[0] && rows[0][0]?.toLowerCase() === 'ad' ? rows.slice(1) : rows;
+
+    const matches = [];
+    for (const name of names) {
+      const nameLower = name.toLowerCase();
+      const row = dataRows.find(r => r[0] && r[0].toLowerCase().trim() === nameLower);
+      if (!row) continue;
+      const [ad, , sonGorusme, anaKonu, bekleyenAksiyonlar, , sonrakiAdim] = row;
+      matches.push(
+        `${ad}\nSon görüşme: ${sonGorusme || '-'}\nKonu: ${anaKonu || '-'}\nBekleyen: ${bekleyenAksiyonlar || '-'}\nSonraki adım: ${sonrakiAdim || '-'}`
+      );
+    }
+    return matches.length ? matches.join('\n\n---\n\n') : 'YOK';
+  } catch (e) {
+    console.error('[SHEETS] getPersonContext hatası:', e.message);
+    return 'YOK';
+  }
+}
+
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
 const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
@@ -1912,6 +1957,10 @@ cron.schedule('30 7 * * *', async () => {
       return addedDate && addedDate < todayDate;
     });
 
+    // Person context from Google Sheets
+    const attendees     = mem.calendar_attendees || [];
+    const personContext = await getPersonContext(attendees).catch(() => 'YOK');
+
     // Build context for Claude
     const ctx = [
       `Bugün: ${dayName}, ${todayDate} (UTC+7)`,
@@ -1944,6 +1993,9 @@ cron.schedule('30 7 * * *', async () => {
 `Bugünün tarihi: ${tplTarih}
 Takvim verisi: ${tplTakvim}
 Dünden ertelenen: ${tplErtelenen}
+
+=== BUGÜNKÜ TOPLANTI KİŞİLERİNİN GEÇMİŞİ ===
+${personContext}
 
 Şu kurallara göre sabah mesajını yaz:
 
@@ -2225,8 +2277,11 @@ console.log('[SYS] Sistem başlatılıyor...');
       if (Array.isArray(calEvents) && calEvents.length) {
         const mem = loadMemory();
         mem.calendar_today = calEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
+        // Collect all unique attendee names for person context lookup
+        const allAttendees = calEvents.flatMap(e => e.attendees || []);
+        mem.calendar_attendees = [...new Set(allAttendees)];
         saveMemory(mem);
-        console.log(`[SYS] ${calEvents.length} Google Takvim etkinliği yüklendi.`);
+        console.log(`[SYS] ${calEvents.length} takvim etkinliği, ${mem.calendar_attendees.length} katılımcı yüklendi.`);
       }
     } catch (e) {
       console.warn('[SYS] Google Takvim yüklenemedi:', e.message);

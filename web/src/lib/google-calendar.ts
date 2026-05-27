@@ -76,15 +76,19 @@ export async function getCalendarEvents(userId: string, date: string) {
   })
 
   return (res.data.items || []).map(e => ({
-    id:       e.id,
-    title:    e.summary || '(başlıksız)',
-    start:    e.start?.dateTime
+    id:        e.id,
+    title:     e.summary || '(başlıksız)',
+    start:     e.start?.dateTime
       ? new Date(e.start.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: tz })
       : 'Tüm gün',
-    end:      e.end?.dateTime
+    end:       e.end?.dateTime
       ? new Date(e.end.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: tz })
       : '',
-    location: e.location || null,
-    allDay:   !e.start?.dateTime,
+    location:  e.location || null,
+    allDay:    !e.start?.dateTime,
+    attendees: (e.attendees || [])
+      .filter(a => !a.self)
+      .map(a => a.displayName || a.email || '')
+      .filter(Boolean),
   }))
 }

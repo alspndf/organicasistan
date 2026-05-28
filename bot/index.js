@@ -384,7 +384,9 @@ async function getPersonContext(attendeeNames) {
       range: 'KİŞİLER!A:H',
     });
     const rows     = res.data.values || [];
-    const dataRows = rows[0]?.[0]?.toLowerCase() === 'ad' ? rows.slice(1) : rows;
+    const firstCell = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
+    const isHeader  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCell);
+    const dataRows  = isHeader ? rows.slice(1) : rows;
     console.log(`[SHEETS] getPersonContext — ${dataRows.length} satır okundu`);
     const matches  = [];
     for (const name of names) {
@@ -460,9 +462,10 @@ async function upsertPersonInSheets(personName, { sonGorusme, anaKonu, bekleyenA
       range: 'KİŞİLER!A:H',
     });
     const rows      = res.data.values || [];
-    const hasHeader = rows[0]?.[0]?.toLowerCase() === 'ad';
-    const dataRows  = hasHeader ? rows.slice(1) : rows;
-    const rowOffset = hasHeader ? 2 : 1;
+    const firstCellU = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
+    const hasHeader  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCellU);
+    const dataRows   = hasHeader ? rows.slice(1) : rows;
+    const rowOffset  = hasHeader ? 2 : 1;
     const idx = dataRows.findIndex(r => r[0] && namesMatch(r[0], personName));
 
     if (idx !== -1) {

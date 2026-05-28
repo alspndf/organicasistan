@@ -660,7 +660,22 @@ function planText() {
 }
 
 // ─── Telegram helpers ─────────────────────────────────────────────────────────
-const send = text => bot.sendMessage(CHAT_ID, text);
+function stripMarkdown(text) {
+  return (text || '')
+    .replace(/\*\*\*(.+?)\*\*\*/gs, '$1')   // ***bold italic***
+    .replace(/\*\*(.+?)\*\*/gs, '$1')        // **bold**
+    .replace(/__(.+?)__/gs, '$1')            // __bold__
+    .replace(/\*(.+?)\*/gs, '$1')            // *italic*
+    .replace(/_([^_\n]+?)_/gs, '$1')         // _italic_
+    .replace(/~~(.+?)~~/gs, '$1')            // ~~strikethrough~~
+    .replace(/`{3}[\s\S]*?`{3}/g, '')        // ```code blocks```
+    .replace(/`(.+?)`/g, '$1')              // `inline code`
+    .replace(/^#{1,6}\s+/gm, '')            // # headers
+    .replace(/^\s*[-*+]\s+/gm, '- ')        // normalize list bullets
+    .trim();
+}
+
+const send = text => bot.sendMessage(CHAT_ID, stripMarkdown(text));
 
 // Send to Telegram and/or WhatsApp based on WA_NOTIFY_CHANNEL env
 function notifyAll(text) {
@@ -673,7 +688,7 @@ function notifyAll(text) {
 }
 
 function sendButtons(text, buttons) {
-  return bot.sendMessage(CHAT_ID, text, {
+  return bot.sendMessage(CHAT_ID, stripMarkdown(text), {
     reply_markup: {
       inline_keyboard: [
         buttons.map(b => ({ text: b.label, callback_data: b.data }))
@@ -2596,6 +2611,10 @@ registerSavedSchedules();
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 console.log('[SYS] Sistem başlatılıyor...');
+console.log('[ENV] GOOGLE_SA_EMAIL   :', process.env.GOOGLE_SA_EMAIL   ? process.env.GOOGLE_SA_EMAIL : 'EKSİK ❌');
+console.log('[ENV] GOOGLE_SA_PRIVATE_KEY:', process.env.GOOGLE_SA_PRIVATE_KEY ? 'yüklü ✓' : 'EKSİK ❌');
+console.log('[ENV] SHEETS_ID         :', process.env.SHEETS_ID         || 'EKSİK ❌');
+console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİK ❌');
 
 (async () => {
   if (dbAdapter) {

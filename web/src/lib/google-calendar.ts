@@ -16,6 +16,7 @@ export function getAuthUrl(redirectUri: string) {
     prompt:      'consent',
     scope: [
       'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/spreadsheets.readonly',
       'https://www.googleapis.com/auth/userinfo.email',
     ],
   })

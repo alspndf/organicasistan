@@ -112,9 +112,27 @@ async function getCalendarEvents(date) {
   }
 }
 
+/** Lookup attendee names in Google Sheets KİŞİLER tab. Returns person context string. */
+async function getPersonContext(names) {
+  if (!names || !names.length) return 'YOK';
+  try {
+    const res = await fetch(`${WEB_URL}/api/sheets/person-context`, {
+      method:  'POST',
+      headers: HEADERS,
+      body:    JSON.stringify({ names }),
+    });
+    if (!res.ok) return 'YOK';
+    const data = await res.json();
+    return data.context || 'YOK';
+  } catch (e) {
+    console.warn('[DB-Adapter] getPersonContext error:', e.message);
+    return 'YOK';
+  }
+}
+
 module.exports = {
   syncTask, updateTaskStatus, deleteTask, getTodayTasks,
   saveRoutine, getRoutines,
   getConversationHistory, saveConversationHistory,
-  getCalendarEvents,
+  getCalendarEvents, getPersonContext,
 };

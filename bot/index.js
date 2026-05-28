@@ -329,6 +329,35 @@ async function getWeather() {
   });
 }
 
+// ─── Name normalization for fuzzy matching ────────────────────────────────────
+function normalizeName(name) {
+  return (name || '')
+    .replace(/İ/g, 'i').replace(/I/g, 'i')
+    .toLowerCase()
+    .replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g').replace(/ş/g, 's').replace(/ç/g, 'c')
+    .trim();
+}
+
+// Matches "Ömer Can" ↔ "Ömercan", "Ömer" ↔ "Ömer Can", etc.
+function namesMatch(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // Without spaces: "Ömer Can" → "omercan" matches "Ömercan" → "omercan"
+  const ca = na.replace(/\s+/g, '');
+  const cb = nb.replace(/\s+/g, '');
+  if (ca === cb) return true;
+  // Token overlap: any word of a found in b's words (length ≥ 3)
+  const tokA = na.split(/\s+/).filter(t => t.length >= 3);
+  const tokB = nb.split(/\s+/).filter(t => t.length >= 3);
+  if (tokA.length && tokB.length && tokA.some(t => tokB.includes(t))) return true;
+  // Containment (no-space form): "omer" ↔ "omercan"
+  if (ca.length >= 3 && cb.length >= 3 && (ca.includes(cb) || cb.includes(ca))) return true;
+  return false;
+}
+
 // ─── Google Sheets: kişi bağlamı (service account) ───────────────────────────
 const SHEETS_ID = process.env.SHEETS_ID || '1DW3bbhhbBrC6VSohdskedhb_iVDI-VJO_FOjB1nRAkc';
 
@@ -352,8 +381,7 @@ async function getPersonContext(attendeeNames) {
     const dataRows = rows[0]?.[0]?.toLowerCase() === 'ad' ? rows.slice(1) : rows;
     const matches  = [];
     for (const name of names) {
-      const nameLower = name.toLowerCase();
-      const row = dataRows.find(r => r[0] && r[0].toLowerCase().trim() === nameLower);
+      const row = dataRows.find(r => r[0] && namesMatch(r[0], name));
       if (!row) continue;
       const [ad, , sonGorusme, anaKonu, bekleyenAksiyonlar, , sonrakiAdim] = row;
       matches.push(
@@ -426,8 +454,7 @@ async function upsertPersonInSheets(personName, { sonGorusme, anaKonu, bekleyenA
     const hasHeader = rows[0]?.[0]?.toLowerCase() === 'ad';
     const dataRows  = hasHeader ? rows.slice(1) : rows;
     const rowOffset = hasHeader ? 2 : 1;
-    const nameLower = personName.toLowerCase().trim();
-    const idx       = dataRows.findIndex(r => r[0] && r[0].toLowerCase().trim() === nameLower);
+    const idx = dataRows.findIndex(r => r[0] && namesMatch(r[0], personName));
 
     if (idx !== -1) {
       const rowNum = idx + rowOffset;
@@ -1093,7 +1120,7 @@ async function runDailyAnalysis() {
       : `${USER_NAME}, bugün görev tamamlanmadı.`;
   }
 
-  send(`🌙 *Gece Analizi*\n\n${summary}`);
+  send(`🌙 Gece Analizi\n\n${summary}`);
 
   if (pending.length > 0) {
     pendingAnalysisReschedule = pending.map(t => ({ title: t.title, time: t.time }));
@@ -1553,13 +1580,13 @@ async function executeTool(name, input) {
         else noProj.push(t);
       }
       if (!Object.keys(grouped).length) return planText();
-      let out = '📋 *Görevler (Projeye Göre):*';
+      let out = '📋 Görevler (Projeye Göre):';
       for (const [proj, ptasks] of Object.entries(grouped)) {
-        out += `\n\n📁 *${proj}*\n`;
+        out += `\n\n📁 ${proj}\n`;
         ptasks.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
       }
       if (noProj.length) {
-        out += '\n📁 *Genel*\n';
+        out += '\n📁 Genel\n';
         noProj.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
       }
       return out.trim();
@@ -2354,7 +2381,7 @@ Düz metin yaz, Telegram'da bozulmasın.`,
           }
 
           // Build Telegram message with inline [Gönder] buttons
-          const studentLines = [`\n📚 *${needAttention.length} öğrenci takip gerekiyor:*\n`];
+          const studentLines = [`\n📚 ${needAttention.length} öğrenci takip gerekiyor:\n`];
           const keyboard     = [];
 
           for (let i = 0; i < drafts.length; i++) {
@@ -2363,8 +2390,8 @@ Düz metin yaz, Telegram'da bozulmasın.`,
             const days  = s.daysSilent === 999 ? 'hiç aktif olmadı' : `${s.daysSilent}g sessiz`;
             const flag  = s.flag === 'critical' ? '🔴' : '🟠';
 
-            studentLines.push(`${flag} *${s.name}* — ${days}`);
-            studentLines.push(`_"${draft}"_`);
+            studentLines.push(`${flag} ${s.name} — ${days}`);
+            studentLines.push(`"${draft}"`);
 
             // Store draft in Map with short ID (Telegram callback_data max 64 bytes)
             const btnId = `sm${Date.now()}_${i}`;
@@ -2373,11 +2400,10 @@ Düz metin yaz, Telegram'da bozulmasın.`,
           }
 
           if (summary.total > 0) {
-            studentLines.push(`\n_Toplam ${summary.total} öğrenci · ${summary.active.length} aktif · ${summary.critical.length + summary.warning.length} takip gerekli_`);
+            studentLines.push(`\nToplam ${summary.total} öğrenci · ${summary.active.length} aktif · ${summary.critical.length + summary.warning.length} takip gerekli`);
           }
 
           bot.sendMessage(CHAT_ID, studentLines.join('\n'), {
-            parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard },
           });
           console.log(`[CRON] ${needAttention.length} öğrenci takip mesajı gönderildi.`);

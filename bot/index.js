@@ -364,8 +364,13 @@ const SHEETS_ID = process.env.SHEETS_ID || '1DW3bbhhbBrC6VSohdskedhb_iVDI-VJO_FO
 async function getPersonContext(attendeeNames) {
   const saEmail = process.env.GOOGLE_SA_EMAIL;
   const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-  if (!saEmail || !saKey) return 'YOK';
+  console.log(`[SHEETS] getPersonContext — SA email: ${saEmail ? saEmail : 'EKSİK'}, key: ${saKey ? 'yüklü' : 'EKSİK'}`);
+  if (!saEmail || !saKey) {
+    console.warn('[SHEETS] getPersonContext: GOOGLE_SA_EMAIL veya GOOGLE_SA_PRIVATE_KEY eksik');
+    return 'YOK';
+  }
   const names = (attendeeNames || []).map(n => n.trim()).filter(Boolean);
+  console.log(`[SHEETS] getPersonContext — aranacak isimler: [${names.join(', ')}]`);
   if (!names.length) return 'YOK';
   try {
     const { google } = require('googleapis');
@@ -373,24 +378,28 @@ async function getPersonContext(attendeeNames) {
       'https://www.googleapis.com/auth/spreadsheets.readonly',
     ]);
     const sheets = google.sheets({ version: 'v4', auth });
+    console.log(`[SHEETS] getPersonContext — Sheets API isteği gönderiliyor... (ID: ${SHEETS_ID})`);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEETS_ID,
       range: 'KİŞİLER!A:H',
     });
     const rows     = res.data.values || [];
     const dataRows = rows[0]?.[0]?.toLowerCase() === 'ad' ? rows.slice(1) : rows;
+    console.log(`[SHEETS] getPersonContext — ${dataRows.length} satır okundu`);
     const matches  = [];
     for (const name of names) {
       const row = dataRows.find(r => r[0] && namesMatch(r[0], name));
-      if (!row) continue;
+      if (!row) { console.log(`[SHEETS] getPersonContext — eşleşme yok: "${name}"`); continue; }
       const [ad, , sonGorusme, anaKonu, bekleyenAksiyonlar, , sonrakiAdim] = row;
+      console.log(`[SHEETS] getPersonContext — eşleşti: "${name}" → "${ad}"`);
       matches.push(
         `${ad}\nSon görüşme: ${sonGorusme || '-'}\nKonu: ${anaKonu || '-'}\nBekleyen: ${bekleyenAksiyonlar || '-'}\nSonraki adım: ${sonrakiAdim || '-'}`
       );
     }
     return matches.length ? matches.join('\n\n---\n\n') : 'YOK';
   } catch (e) {
-    console.error('[SHEETS] getPersonContext hatası:', e.message);
+    console.error('[SHEETS] getPersonContext HATA:', e.message);
+    console.error('[SHEETS] getPersonContext tam hata:', e);
     return 'YOK';
   }
 }
@@ -2646,6 +2655,14 @@ console.log('[SYS] Sistem başlatılıyor...');
       console.warn('[SYS] Google Takvim yüklenemedi:', e.message);
     }
   }
+
+  // ─── Sheets bağlantı testi (startup) ──────────────────────────────────────
+  console.log('[SYS] Sheets bağlantısı test ediliyor...');
+  getPersonContext(['Ömercan']).then(result => {
+    console.log('[SYS] Sheets test sonucu:', result === 'YOK' ? 'eşleşme yok (YOK)' : result.slice(0, 120));
+  }).catch(e => {
+    console.error('[SYS] Sheets test HATA:', e.message);
+  });
 
   // ─── WhatsApp init (optional) ──────────────────────────────────────────────
   const waEnabled = process.env.WA_ENABLED === 'true' || !!process.env.ALLOWED_WA_NUMBERS;

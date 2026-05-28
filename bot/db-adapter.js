@@ -99,11 +99,16 @@ function saveConversationHistory(messages) {
   }).catch(e => console.warn('[DB-Adapter] saveConversationHistory error:', e.message));
 }
 
+const BOT_TZ = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh';
+
 /** Fetch Google Calendar events for a given date. Returns a Promise. */
 async function getCalendarEvents(date) {
   try {
     const d   = date || TODAY();
-    const res = await fetch(`${WEB_URL}/api/bot/calendar?date=${d}`, { headers: HEADERS });
+    const res = await fetch(
+      `${WEB_URL}/api/bot/calendar?date=${d}&tz=${encodeURIComponent(BOT_TZ)}`,
+      { headers: HEADERS }
+    );
     if (!res.ok) return [];
     return await res.json();
   } catch (e) {

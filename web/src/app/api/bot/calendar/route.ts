@@ -21,9 +21,10 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'No user' }, { status: 404 })
 
   const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
+  const tz   = req.nextUrl.searchParams.get('tz') || undefined
 
   try {
-    const events = await getCalendarEvents(user.id, date)
+    const events = await getCalendarEvents(user.id, date, tz)
     return NextResponse.json(events)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'unknown'

@@ -22,14 +22,14 @@ export function getAuthUrl(redirectUri: string) {
   })
 }
 
-export async function getCalendarEvents(userId: string, date: string) {
+export async function getCalendarEvents(userId: string, date: string, tzOverride?: string) {
   const [token, settings] = await Promise.all([
     prisma.googleCalendarToken.findUnique({ where: { userId } }),
     prisma.userSettings.findUnique({ where: { userId }, select: { timezone: true } }),
   ])
   if (!token) return []
 
-  const tz = settings?.timezone || 'Europe/Istanbul'
+  const tz = tzOverride || settings?.timezone || 'Asia/Ho_Chi_Minh'
 
   const client = makeOAuth2Client()
   client.setCredentials({

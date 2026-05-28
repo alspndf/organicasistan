@@ -2614,6 +2614,8 @@ registerSavedSchedules();
 console.log('[SYS] Sistem başlatılıyor...');
 console.log('[ENV] GOOGLE_SA_EMAIL   :', process.env.GOOGLE_SA_EMAIL   ? process.env.GOOGLE_SA_EMAIL : 'EKSİK ❌');
 console.log('[ENV] GOOGLE_SA_PRIVATE_KEY:', process.env.GOOGLE_SA_PRIVATE_KEY ? 'yüklü ✓' : 'EKSİK ❌');
+console.log('[SA] email:', process.env.GOOGLE_SA_EMAIL);
+console.log('[SA] key ilk 50 kar:', process.env.GOOGLE_SA_PRIVATE_KEY?.substring(0, 50));
 console.log('[ENV] SHEETS_ID         :', process.env.SHEETS_ID         || 'EKSİK ❌');
 console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİK ❌');
 

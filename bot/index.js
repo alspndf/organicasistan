@@ -1406,8 +1406,12 @@ async function executeTool(name, input) {
       return `Plan hazır!\n${added.map(t => `⏳ ${t.time} — ${t.title}`).join('\n')}`;
     }
 
-    case 'get_plan':
-      return planText();
+    case 'get_plan': {
+      const mem = loadMemory();
+      const calEvents = mem.calendar_today || [];
+      if (!calEvents.length) return 'Bugün takvimde etkinlik yok.';
+      return 'Bugünün takvimi:\n\n' + calEvents.join('\n');
+    }
 
     case 'save_memory': {
       if (input.type === 'weekly_schedule' && input.day) {
@@ -2615,35 +2619,6 @@ console.log('[SYS] Sistem başlatılıyor...');
     } catch (e) {
       console.warn('[SYS] Google Takvim yüklenemedi:', e.message);
     }
-  }
-
-  const mem        = loadMemory();
-  const isFirstRun = conversationHistory.length === 0 && !mem.onboarding_done && mem.rules.length === 0;
-
-  if (isFirstRun) {
-    const onboardingMsg =
-`Merhaba! 👋 Ben ${ASSISTANT_NAME}, sizin kişisel asistanınızım.
-
-Sizi daha iyi tanımak ve en iyi şekilde yardımcı olmak için birkaç şey sormak istiyorum:
-
-1️⃣ Ne iş yapıyorsunuz? (sektör, rol, günlük iş akışı)
-2️⃣ Genellikle kaçta işe başlayıp kaçta bitiriyorsunuz?
-3️⃣ En çok hangi konularda yardıma ihtiyaç duyuyorsunuz? (planlama, mesaj yazma, hatırlatma, araştırma...)
-4️⃣ Haftalık düzenli programınız var mı? (toplantılar, spor, ders gibi)
-5️⃣ Benden ne bekliyorsunuz — nasıl bir asistan olayım?
-
-Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
-    send(onboardingMsg);
-    // Mark onboarding as started so we don't repeat on next restart
-    mem.onboarding_done = true;
-    saveMemory(mem);
-  } else {
-    const pendingCount = tasks.filter(t => t.status === 'pending').length;
-    const doneCount    = tasks.filter(t => t.status === 'done').length;
-    const startupMsg = tasks.length
-      ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
-      : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊`;
-    send(startupMsg);
   }
 
   // ─── WhatsApp init (optional) ──────────────────────────────────────────────

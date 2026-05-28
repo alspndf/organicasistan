@@ -401,8 +401,7 @@ async function getPersonContext(attendeeNames) {
     }
     return matches.length ? matches.join('\n\n---\n\n') : 'YOK';
   } catch (e) {
-    console.error('[SHEETS] getPersonContext HATA:', e.message);
-    console.error('[SHEETS] getPersonContext tam hata:', e);
+    console.error('[SHEETS HATA YERİ] getPersonContext:', e.stack || e.message);
     return 'YOK';
   }
 }
@@ -431,7 +430,7 @@ async function getTaskHistory(date) {
     const rows = res.data.values || [];
     return rows.filter(r => r[0] === date);
   } catch (e) {
-    console.error('[SHEETS] getTaskHistory hatası:', e.message);
+    console.error('[SHEETS HATA YERİ] getTaskHistory:', e.stack || e.message);
     return [];
   }
 }
@@ -449,7 +448,7 @@ async function writeTaskHistory(rows) {
     });
     console.log(`[SHEETS] ${rows.length} satır GÖREV GEÇMİŞİ'ne yazıldı.`);
   } catch (e) {
-    console.error('[SHEETS] writeTaskHistory hatası:', e.message);
+    console.error('[SHEETS HATA YERİ] writeTaskHistory:', e.stack || e.message);
   }
 }
 
@@ -504,7 +503,7 @@ async function upsertPersonInSheets(personName, { sonGorusme, anaKonu, bekleyenA
     }
     return true;
   } catch (e) {
-    console.error('[SHEETS] upsertPersonInSheets hatası:', e.message);
+    console.error('[SHEETS HATA YERİ] upsertPersonInSheets:', e.stack || e.message);
     return false;
   }
 }

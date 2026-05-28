@@ -2659,6 +2659,19 @@ console.log('[SYS] Sistem başlatılıyor...');
     }
   }
 
+  // ─── Startup mesajı ───────────────────────────────────────────────────────
+  send(
+`Günaydın Alp. Sistem aktif.
+
+Bugün yapabileceklerin:
+- Bugünün planı
+- Görüşmelerin son özetleri
+- Görev ekle / tamamla / ertele
+- Toplantı özeti at
+
+Saat 07:30'da sabah brifingini otomatik alacaksın.`
+  );
+
   // ─── Sheets bağlantı testi (startup) ──────────────────────────────────────
   console.log('[SYS] Sheets bağlantısı test ediliyor...');
   getPersonContext(['Ömercan']).then(result => {

@@ -31,6 +31,13 @@ export async function POST(req: Request) {
     select: { userId: true, timezone: true, telegramToken: true, telegramChatId: true },
   })
 
+  console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
+  for (const u of users) {
+    console.log(`[USER] userId=${u.userId} | telegramToken=${u.telegramToken ? 'dolu ✓' : 'BOŞ ❌'} | telegramChatId=${u.telegramChatId || 'BOŞ ❌'} | timezone=${u.timezone}`)
+    const allTasks = await prisma.task.findMany({ where: { userId: u.userId }, orderBy: { date: 'desc' }, take: 3 })
+    console.log(`[TASKS] userId=${u.userId} toplam (son 3): ${allTasks.length}`, allTasks.map(t => `${t.date} ${t.time} "${t.title}" [${t.status}]`))
+  }
+
   const fired: { taskId: string; title: string; time: string }[] = []
 
   for (const s of users) {

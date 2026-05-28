@@ -2691,13 +2691,36 @@ Bugün yapabileceklerin:
 Saat 07:30'da sabah brifingini otomatik alacaksın.`
   );
 
-  // ─── Sheets bağlantı testi (startup) ──────────────────────────────────────
-  console.log('[SYS] Sheets bağlantısı test ediliyor...');
-  getPersonContext(['Ömercan']).then(result => {
-    console.log('[SYS] Sheets test sonucu:', result === 'YOK' ? 'eşleşme yok (YOK)' : result.slice(0, 120));
-  }).catch(e => {
-    console.error('[SYS] Sheets test HATA:', e.message);
-  });
+  // ─── Sheets başlangıç bağlantısı ──────────────────────────────────────────
+  {
+    const saEmail = process.env.GOOGLE_SA_EMAIL;
+    const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+    if (!saEmail || !saKey) {
+      console.warn('[SHEETS] GOOGLE_SA_EMAIL veya GOOGLE_SA_PRIVATE_KEY eksik — Sheets devre dışı');
+    } else {
+      (async () => {
+        try {
+          const { google } = require('googleapis');
+          const auth   = new google.auth.JWT(saEmail, null, saKey, [
+            'https://www.googleapis.com/auth/spreadsheets.readonly',
+          ]);
+          const sheets = google.sheets({ version: 'v4', auth });
+          const res    = await sheets.spreadsheets.values.get({
+            spreadsheetId: SHEETS_ID,
+            range: 'KİŞİLER!A:A',
+          });
+          const rows       = res.data.values || [];
+          const firstCell  = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
+          const isHeader   = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCell);
+          const kisiSayisi = isHeader ? rows.length - 1 : rows.length;
+          console.log('[SHEETS] Bağlantı başarılı');
+          console.log(`[SHEETS] ${kisiSayisi} kişi kartı yüklendi`);
+        } catch (e) {
+          console.error('[SHEETS] Bağlantı hatası:', e.message);
+        }
+      })();
+    }
+  }
 
   // ─── WhatsApp init (optional) ──────────────────────────────────────────────
   const waEnabled = process.env.WA_ENABLED === 'true' || !!process.env.ALLOWED_WA_NUMBERS;

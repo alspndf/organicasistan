@@ -60,8 +60,13 @@ let studentsModule = null;
 try { studentsModule = require('./students'); } catch {}
 const _pendingStudentMsgs = new Map(); // shortId → { phone, draft }
 
+// Meeting post-flow state
+const firedMeetingKeys = new Set();  // prevent double-firing per event
+let pendingMeetingFlow = null;       // { eventId, eventTitle, attendees, stage }
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_TASKS   = 9999;
+const MEETING_KEYWORDS = ['toplantı', 'görüşme', 'meet', 'meeting', '1:1', 'call'];
 const TASK_MIN_M  = 30;   // minimum task block in minutes
 const TASK_MAX_M  = 90;   // maximum task block in minutes
 const PRE_REMIND  = 10;   // pre-reminder lead time in minutes
@@ -406,6 +411,139 @@ async function writeTaskHistory(rows) {
   } catch (e) {
     console.error('[SHEETS] writeTaskHistory hatası:', e.message);
   }
+}
+
+// ─── Google Sheets: KİŞİLER upsert (toplantı sonrası) ────────────────────────
+async function upsertPersonInSheets(personName, { sonGorusme, anaKonu, bekleyenAksiyonlar, sonrakiAdim, notText }) {
+  const sheets = makeSheetsClient(false);
+  if (!sheets) { console.warn('[SHEETS] upsertPersonInSheets: SA credentials eksik'); return false; }
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEETS_ID,
+      range: 'KİŞİLER!A:H',
+    });
+    const rows      = res.data.values || [];
+    const hasHeader = rows[0]?.[0]?.toLowerCase() === 'ad';
+    const dataRows  = hasHeader ? rows.slice(1) : rows;
+    const rowOffset = hasHeader ? 2 : 1;
+    const nameLower = personName.toLowerCase().trim();
+    const idx       = dataRows.findIndex(r => r[0] && r[0].toLowerCase().trim() === nameLower);
+
+    if (idx !== -1) {
+      const rowNum = idx + rowOffset;
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEETS_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `KİŞİLER!C${rowNum}`, values: [[sonGorusme]] },
+            { range: `KİŞİLER!D${rowNum}`, values: [[anaKonu]] },
+            { range: `KİŞİLER!E${rowNum}`, values: [[bekleyenAksiyonlar]] },
+            { range: `KİŞİLER!G${rowNum}`, values: [[sonrakiAdim || '']] },
+            { range: `KİŞİLER!H${rowNum}`, values: [[notText || '']] },
+          ],
+        },
+      });
+      console.log(`[SHEETS] KİŞİLER güncellendi: ${personName} (satır ${rowNum})`);
+    } else {
+      // New person — build A:H row (8 columns)
+      const newRow = ['', '', '', '', '', '', '', ''];
+      newRow[0] = personName;
+      newRow[2] = sonGorusme;
+      newRow[3] = anaKonu;
+      newRow[4] = bekleyenAksiyonlar;
+      newRow[6] = sonrakiAdim || '';
+      newRow[7] = notText || '';
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEETS_ID,
+        range: 'KİŞİLER!A:H',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [newRow] },
+      });
+      console.log(`[SHEETS] KİŞİLER yeni satır: ${personName}`);
+    }
+    return true;
+  } catch (e) {
+    console.error('[SHEETS] upsertPersonInSheets hatası:', e.message);
+    return false;
+  }
+}
+
+// Parse the structured AI summary response
+function parseMeetingSummary(text) {
+  const result = { anaKonu: '', bekleyenAksiyonlar: '', kritiklik: '', sonrakiAdim: '', notText: '' };
+  const aksiyonlar = [];
+  let mode = null;
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) { if (mode === 'aksiyon') mode = null; continue; }
+    if      (t.startsWith('ANA KONU:'))            { result.anaKonu     = t.slice('ANA KONU:'.length).trim(); mode = null; }
+    else if (t.startsWith('BEKLEYEN AKSİYONLAR:')) { mode = 'aksiyon'; }
+    else if (t.startsWith('KRİTİKLİK:'))           { result.kritiklik   = t.slice('KRİTİKLİK:'.length).trim(); mode = null; }
+    else if (t.startsWith('SONRAKİ ADIM:'))        { result.sonrakiAdim = t.slice('SONRAKİ ADIM:'.length).trim(); mode = null; }
+    else if (t.startsWith('NOT:'))                 { result.notText     = t.slice('NOT:'.length).trim(); mode = null; }
+    else if (mode === 'aksiyon' && t.startsWith('-')) { aksiyonlar.push(t.slice(1).trim()); }
+  }
+  result.bekleyenAksiyonlar = aksiyonlar.join('\n');
+  return result;
+}
+
+// Node 5-7: receive user summary → Claude → Sheets → confirm
+async function handleMeetingSummary(userText) {
+  const flow = pendingMeetingFlow;
+  pendingMeetingFlow = null;
+
+  const personName = (flow.attendees || [])[0] || flow.eventTitle;
+  const today      = todayISO();
+
+  let summaryText;
+  try {
+    const r = await anthropic.messages.create({
+      model: MODEL, max_tokens: 400,
+      system: `Sen Alp'in icra asistanısın. Adın Yeliz.\nKısa yaz. Markdown kullanma. Düz metin.`,
+      messages: [{
+        role: 'user',
+        content:
+`Toplantı kişisi: ${personName}
+Tarih: ${today}
+Ham özet: ${userText}
+
+Şu formatı doldur, sadece bunu yaz, açıklama ekleme:
+
+ANA KONU: [1 cümle]
+BEKLEYEN AKSİYONLAR:
+- [fiil ile başla]
+- [fiil ile başla]
+KRİTİKLİK: [bu hafta / bu ay / takipte]
+SONRAKİ ADIM: [tarih varsa yaz, yoksa boş bırak]
+NOT: [önemli detay varsa yaz, yoksa boş bırak]`,
+      }],
+    });
+    summaryText = r.content[0].text.trim();
+  } catch (e) {
+    console.error('[MEETING] AI özet hatası:', e.message);
+    send('❌ Özet işlenemedi. Tekrar dener misin?');
+    return;
+  }
+
+  const parsed = parseMeetingSummary(summaryText);
+
+  await upsertPersonInSheets(personName, {
+    sonGorusme:         today,
+    anaKonu:            parsed.anaKonu,
+    bekleyenAksiyonlar: parsed.bekleyenAksiyonlar,
+    sonrakiAdim:        parsed.sonrakiAdim,
+    notText:            parsed.notText,
+  });
+
+  const aksiyonLines = parsed.bekleyenAksiyonlar
+    ? parsed.bekleyenAksiyonlar.split('\n').filter(Boolean).map(l => `- ${l}`).join('\n')
+    : '(yok)';
+  let confirmMsg = `${personName} kartı güncellendi.\n\nBekleyen:\n${aksiyonLines}`;
+  if (parsed.sonrakiAdim) confirmMsg += `\n\nSonraki adım: ${parsed.sonrakiAdim}`;
+
+  send(confirmMsg);
+  console.log(`[MEETING] Toplantı özeti tamamlandı: ${personName}`);
 }
 
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
@@ -1641,6 +1779,52 @@ setInterval(() => {
   }
 }, 30_000);
 
+// ─── Meeting post-flow checker (every 5 min) ──────────────────────────────────
+setInterval(async () => {
+  if (!dbAdapter || pendingMeetingFlow) return;
+  try {
+    const calEvents = await dbAdapter.getCalendarEvents();
+    if (!Array.isArray(calEvents)) return;
+    const now    = nowHH();
+    const nowMin = toMinutes(now);
+
+    for (const ev of calEvents) {
+      if (ev.allDay || !ev.end) continue;
+      const titleLower = ev.title.toLowerCase();
+      if (!MEETING_KEYWORDS.some(kw => titleLower.includes(kw))) continue;
+
+      const endTime = parseTime(ev.end);
+      if (!endTime) continue;
+
+      const triggerMins = toMinutes(addMins(endTime, 10));
+      const diff        = nowMin - triggerMins;
+      const meetingKey  = `meeting:${ev.id || ev.title}:${endTime}`;
+
+      // Fire within a 5-min window after trigger (handles interval jitter)
+      if (!firedMeetingKeys.has(meetingKey) && diff >= 0 && diff < 5) {
+        firedMeetingKeys.add(meetingKey);
+        pendingMeetingFlow = {
+          eventId:    ev.id || ev.title,
+          eventTitle: ev.title,
+          attendees:  ev.attendees || [],
+          stage:      'awaiting_confirm',
+        };
+        await sendButtons(
+          `${ev.title} bitti mi?`,
+          [
+            { label: '✅ Evet', data: 'MEETING_YES' },
+            { label: '⏭ Hayır', data: 'MEETING_NO' },
+          ]
+        );
+        console.log(`[MEETING] Toplantı sonu tetiklendi: ${ev.title} (${endTime})`);
+        break;  // one flow at a time
+      }
+    }
+  } catch (e) {
+    console.error('[MEETING] Polling hatası:', e.message);
+  }
+}, 5 * 60 * 1000);
+
 // ─── Callback handler ─────────────────────────────────────────────────────────
 bot.on('callback_query', async query => {
   await bot.answerCallbackQuery(query.id);
@@ -1681,6 +1865,36 @@ bot.on('callback_query', async query => {
     } catch (e) {
       send(`❌ Gönderilemedi: ${e.message}`);
     }
+    return;
+  }
+
+  // ── Meeting post-flow ─────────────────────────────────────────────────────
+  if (data === 'MEETING_YES') {
+    if (!pendingMeetingFlow) return;
+    pendingMeetingFlow.stage = 'awaiting_summary';
+    send('Toplantı özetini at. Format serbest.');
+    return;
+  }
+
+  if (data === 'MEETING_NO') {
+    if (!pendingMeetingFlow) return;
+    const title = pendingMeetingFlow.eventTitle;
+    pendingMeetingFlow = null;
+    bot.sendMessage(CHAT_ID,
+      `Tamam. Ne zamana alalım?\n${title}`,
+      { reply_markup: { inline_keyboard: [
+        [{ text: '→ Bugün sonra',  callback_data: 'MEETING_RESCHEDULE:today' }],
+        [{ text: '→ Yarın sabah',  callback_data: 'MEETING_RESCHEDULE:tomorrow' }],
+        [{ text: '→ Haftaya',      callback_data: 'MEETING_RESCHEDULE:nextweek' }],
+      ] } }
+    );
+    return;
+  }
+
+  if (data.startsWith('MEETING_RESCHEDULE:')) {
+    const option = data.slice('MEETING_RESCHEDULE:'.length);
+    const label  = option === 'today' ? 'bugün sonraya' : option === 'tomorrow' ? 'yarın sabaha' : 'haftaya';
+    send(`Tamam. ${label} not aldım.`);
     return;
   }
 
@@ -1936,6 +2150,15 @@ bot.on('message', async msg => {
       // Unrelated message — clear confirm state and process normally
       pendingDeleteIds = [];
     }
+  }
+
+  // ── Meeting summary intercept ──────────────────────────────────────────────
+  if (pendingMeetingFlow?.stage === 'awaiting_summary') {
+    await handleMeetingSummary(text).catch(e => {
+      console.error('[MEETING] handleMeetingSummary hatası:', e.message);
+      send('❌ Özet işlenemedi.');
+    });
+    return;
   }
 
   try {

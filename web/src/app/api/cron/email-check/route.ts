@@ -8,7 +8,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const now = nowHH()
+  const tz  = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
+  const now = new Date().toLocaleTimeString('sv-SE', { timeZone: tz }).slice(0, 5)
+
+  const totalConns = await prisma.emailConnection.count()
+  console.log(`[EMAIL] Toplam EmailConnection: ${totalConns} | şu an: ${now}`)
+
+  if (totalConns > 0) {
+    const sample = await prisma.emailConnection.findFirst()
+    console.log(`[EMAIL] Örnek kayıt: provider=${sample?.provider} checkTime=${sample?.checkTime} userId=${sample?.userId}`)
+  }
 
   // Find email connections whose check time matches the current hour:minute
   const connections = await prisma.emailConnection.findMany({

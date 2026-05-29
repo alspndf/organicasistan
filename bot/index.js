@@ -62,7 +62,8 @@ const _pendingStudentMsgs = new Map(); // shortId → { phone, draft }
 
 // Meeting post-flow state
 const firedMeetingKeys = new Set();  // prevent double-firing per event
-let pendingMeetingFlow = null;       // { eventId, eventTitle, attendees, stage }
+let pendingMeetingFlow  = null;       // { eventId, eventTitle, attendees, stage }
+let awaitingExtraTask  = false;       // after morning briefing: ask for extra tasks
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_TASKS   = 9999;
@@ -2223,6 +2224,20 @@ bot.on('message', async msg => {
     }
   }
 
+  // ── Extra task intercept (after morning briefing) ─────────────────────────
+  if (awaitingExtraTask) {
+    awaitingExtraTask = false;
+    const lower = text.toLowerCase().trim();
+    const isNo  = ['hayır', 'yok', 'yok.', 'hayır.', 'no', 'nope', '-'].some(w => lower === w || lower.startsWith(w + ' '));
+    if (!isNo) {
+      // Pass to agent with explicit add-task intent
+      await runAgent(`Şu görevi bugüne ekle: ${text}`).catch(e => {
+        console.error('[EXTRA_TASK] runAgent hatası:', e.message);
+      });
+    }
+    return;
+  }
+
   // ── Meeting summary intercept ──────────────────────────────────────────────
   if (pendingMeetingFlow?.stage === 'awaiting_summary') {
     await handleMeetingSummary(text).catch(e => {
@@ -2388,6 +2403,12 @@ Düz metin yaz, Telegram'da bozulmasın.`,
 
     notifyAll(briefing);
     console.log('[CRON] 07:30 brifing gönderildi.');
+
+    // 10 sn sonra ekstra görev sorusu
+    setTimeout(() => {
+      send('Bugün takvime eklenmesi gereken ekstra bir görev var mı?');
+      awaitingExtraTask = true;
+    }, 10_000);
 
     // ── Student follow-up analysis (runs after main briefing) ──────────────
     if (studentsModule) {

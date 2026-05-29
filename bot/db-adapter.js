@@ -21,11 +21,15 @@ const TODAY = () => new Date().toLocaleDateString('sv-SE', { timeZone: BOT_TZ_FO
 
 /** Upsert a task into the web app DB (fire-and-forget). */
 function syncTask(task, date) {
+  const taskDate = date || TODAY();
+  console.log(`[DB-Adapter] syncTask: "${task.title}" tarih=${taskDate} id=${task.id}`);
   fetch(`${WEB_URL}/api/bot/tasks`, {
     method:  'POST',
     headers: HEADERS,
-    body:    JSON.stringify({ ...task, date: date || TODAY() }),
-  }).catch(e => console.warn('[DB-Adapter] syncTask error:', e.message));
+    body:    JSON.stringify({ ...task, date: taskDate }),
+  })
+    .then(r => r.ok ? console.log(`[DB-Adapter] syncTask OK: ${task.id}`) : r.text().then(t => console.warn(`[DB-Adapter] syncTask FAILED ${r.status}:`, t)))
+    .catch(e => console.warn('[DB-Adapter] syncTask error:', e.message));
 }
 
 /** Update task status (fire-and-forget). */

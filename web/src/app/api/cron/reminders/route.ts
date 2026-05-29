@@ -33,6 +33,8 @@ export async function POST(req: Request) {
 
   console.log(`[DEBUG] UTC: ${new Date().toISOString()} | ${DEFAULT_TZ}: ${nowHHInTz(DEFAULT_TZ)} | tarih: ${todayInTz(DEFAULT_TZ)}`)
   console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
+  const totalTasks = await prisma.task.count()
+  console.log(`[TASKS] DB toplam görev: ${totalTasks}`)
 
   // timezone yanlışsa düzelt
   for (const u of users) {

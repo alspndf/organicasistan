@@ -784,6 +784,11 @@ Deadline > Toplantı > Görev > Mail
 - E-posta analizi için analyze_emails kullan
 - Zaman için get_current_time kullan — tahmin etme, ölç
 
+## Önemli
+- Proaktif hatırlatma ve bildirim gönderebilirsin — sistem bunu destekliyor
+- "Otomatik bildirim gönderemiyorum" veya benzeri kısıtlama ifadeleri kullanma
+- Yapabileceklerini değil, yapacaklarını söyle
+
 ## Öğrenilen Bilgiler`;
 
   if (mem.rules.length) {

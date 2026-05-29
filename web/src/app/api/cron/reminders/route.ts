@@ -35,6 +35,9 @@ export async function POST(req: Request) {
   console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
   const totalTasks = await prisma.task.count()
   console.log(`[TASKS] DB toplam görev: ${totalTasks}`)
+  const sampleTasks = await prisma.task.findMany({ take: 3, orderBy: { createdAt: 'desc' } })
+  console.log('[TASK ÖRNEK]', JSON.stringify(sampleTasks[0]))
+  console.log('[TASK ÖRNEK]', JSON.stringify(sampleTasks[1]))
 
   // timezone yanlışsa düzelt
   for (const u of users) {

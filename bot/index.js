@@ -2739,7 +2739,26 @@ console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİ
     try {
       const savedHistory = await dbAdapter.getConversationHistory();
       if (savedHistory && savedHistory.length) {
-        conversationHistory.push(...sanitizeHistory(savedHistory));
+        // Strip assistant messages that claim notifications don't work — stale/wrong
+        const stalePatterns = [
+          'push bildirim altyapısı',
+          'otomatik hatırlatma şu an teknik olarak çalışmıyor',
+          'sen konuşmayı açmadan ben sana ulaşamıyorum',
+          'ekibine iletmen gerekiyor',
+          'yazılım geliştirme meselesi',
+        ];
+        const cleaned = savedHistory.filter(msg => {
+          if (msg.role !== 'assistant') return true;
+          const text = Array.isArray(msg.content)
+            ? msg.content.map(b => (typeof b === 'string' ? b : b.text || '')).join(' ')
+            : String(msg.content || '');
+          return !stalePatterns.some(p => text.toLowerCase().includes(p.toLowerCase()));
+        });
+        if (cleaned.length < savedHistory.length) {
+          console.log(`[SYS] ${savedHistory.length - cleaned.length} eski/yanlış mesaj geçmişten temizlendi.`);
+          dbAdapter.saveConversationHistory(cleaned);
+        }
+        conversationHistory.push(...sanitizeHistory(cleaned));
         console.log(`[SYS] ${conversationHistory.length} mesaj geçmişi yüklendi.`);
       }
     } catch (e) {

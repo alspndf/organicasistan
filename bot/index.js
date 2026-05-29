@@ -1813,6 +1813,14 @@ setInterval(() => {
       console.log(`[PRE] ${task.title}`);
     }
 
+    // On-time notification — exactly at task time
+    const onTimeKey = `ontime:${task.id}:${task.time}`;
+    if (!firedKeys.has(onTimeKey) && now === task.time) {
+      firedKeys.add(onTimeKey);
+      send(`🔔 ${task.time} — ${task.title}`);
+      console.log(`[ONTIME] ${task.title}`);
+    }
+
     // Completion check 10 min after task time
     const fireKey = `fire:${task.id}:${task.time}`;
     if (!firedKeys.has(fireKey) && now === addMins(task.time, 10)) {

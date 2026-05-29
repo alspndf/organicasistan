@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       console.log(`[USER] timezone güncellendi: ${u.timezone} → ${DEFAULT_TZ} (userId=${u.userId})`)
     }
     const todayTasks = await prisma.task.findMany({
-      where: { userId: u.userId, date: todayInTz(DEFAULT_TZ) },
+      where: { date: todayInTz(DEFAULT_TZ), status: 'pending' },
       orderBy: { time: 'asc' },
     })
     console.log(`[TASKS] bugün (${todayInTz(DEFAULT_TZ)}) görev sayısı: ${todayTasks.length}`)
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     console.log(`[REMINDER] Kontrol: şu an ${now} | hedef görev saati ${targetTime} | tarih ${today} | tz ${tz}`)
 
     const tasks = await prisma.task.findMany({
-      where: { userId: s.userId, date: today, status: 'pending', time: targetTime },
+      where: { date: today, status: 'pending', time: targetTime },
     })
 
     console.log(`[REMINDER] Bulunan görev sayısı: ${tasks.length}`)

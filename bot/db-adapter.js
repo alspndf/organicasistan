@@ -16,7 +16,8 @@ const HEADERS = {
   'x-bot-user-id': USER_ID,
 };
 
-const TODAY = () => new Date().toISOString().split('T')[0];
+const BOT_TZ_FOR_DATE = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh';
+const TODAY = () => new Date().toLocaleDateString('sv-SE', { timeZone: BOT_TZ_FOR_DATE });
 
 /** Upsert a task into the web app DB (fire-and-forget). */
 function syncTask(task, date) {

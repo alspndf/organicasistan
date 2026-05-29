@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
   const userId = await getBotUserId(req)
   if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
-  const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
+  const tz   = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
+  const date = req.nextUrl.searchParams.get('date') || new Date().toLocaleDateString('sv-SE', { timeZone: tz })
 
   const tasks = await prisma.task.findMany({
     where: { userId, date },
@@ -41,7 +42,8 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json()
   const { id, title, time, date, status } = body
-  const taskDate = date || new Date().toISOString().split('T')[0]
+  const tz2      = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
+  const taskDate = date || new Date().toLocaleDateString('sv-SE', { timeZone: tz2 })
 
   const task = await prisma.task.upsert({
     where:  { id: id || '__new__' },

@@ -41,6 +41,15 @@ function updateTaskStatus(taskId, status) {
   }).catch(e => console.warn('[DB-Adapter] updateTaskStatus error:', e.message));
 }
 
+/** Update task time (fire-and-forget). */
+function rescheduleTask(taskId, newTime) {
+  fetch(`${WEB_URL}/api/bot/tasks`, {
+    method:  'PATCH',
+    headers: HEADERS,
+    body:    JSON.stringify({ id: taskId, time: newTime }),
+  }).catch(e => console.warn('[DB-Adapter] rescheduleTask error:', e.message));
+}
+
 /** Delete a task (fire-and-forget). */
 function deleteTask(taskId) {
   fetch(`${WEB_URL}/api/bot/tasks?id=${encodeURIComponent(taskId)}`, {
@@ -141,7 +150,7 @@ async function getPersonContext(names) {
 }
 
 module.exports = {
-  syncTask, updateTaskStatus, deleteTask, getTodayTasks,
+  syncTask, updateTaskStatus, rescheduleTask, deleteTask, getTodayTasks,
   saveRoutine, getRoutines,
   getConversationHistory, saveConversationHistory,
   getCalendarEvents, getPersonContext,

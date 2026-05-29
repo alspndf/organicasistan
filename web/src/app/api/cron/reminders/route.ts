@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
 const DEFAULT_TZ  = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
-const PRE_REMIND  = 10 // minutes before task time
+const PRE_REMIND  = 5 // minutes before task time
 
 function todayInTz(tz: string): string {
   // sv-SE locale gives "YYYY-MM-DD"
@@ -145,6 +145,58 @@ export async function POST(req: Request) {
         console.log(`[REMINDER] Gönderildi: ${task.title} (${task.time})`)
       } catch (e: unknown) {
         console.error('[REMINDER] Telegram gönderme hatası:', e instanceof Error ? e.message : e)
+      }
+    }
+  }
+
+  // ── On-time notifications with action buttons ─────────────────────────────
+  for (const s of users) {
+    const tz    = DEFAULT_TZ || s.timezone
+    const today = todayInTz(tz)
+    const now   = nowHHInTz(tz)
+
+    const ontimeTasks = await prisma.task.findMany({
+      where: { userId: s.userId, date: today, status: 'pending', time: now },
+    })
+
+    for (const task of ontimeTasks) {
+      const existing = await prisma.reminder.findFirst({
+        where: { taskId: task.id, date: today, sent: true, channel: 'telegram-ontime' },
+      })
+      if (existing) continue
+
+      await prisma.reminder.create({
+        data: {
+          userId:   s.userId,
+          taskId:   task.id,
+          message:  task.title,
+          remindAt: now,
+          date:     today,
+          sent:     true,
+          channel:  'telegram-ontime',
+        },
+      })
+
+      try {
+        await fetch(`https://api.telegram.org/bot${s.telegramToken}/sendMessage`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id:      s.telegramChatId,
+            text:         `⏰ ${task.time} — ${task.title}`,
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '✅ Tamamlandı',   callback_data: `RAIL_DONE:${task.id}` },
+                { text: '❌ Tamamlanmadı', callback_data: `RAIL_NOTDONE:${task.id}` },
+                { text: '⏰ Ertele',       callback_data: `RAIL_POSTPONE:${task.time}:${task.id}` },
+              ]],
+            },
+          }),
+        })
+        fired.push({ taskId: task.id, title: task.title, time: task.time })
+        console.log(`[ONTIME] Gönderildi: ${task.title} (${task.time})`)
+      } catch (e: unknown) {
+        console.error('[ONTIME] Telegram gönderme hatası:', e instanceof Error ? e.message : e)
       }
     }
   }

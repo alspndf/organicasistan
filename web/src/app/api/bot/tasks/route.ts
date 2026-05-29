@@ -69,10 +69,13 @@ export async function PATCH(req: NextRequest) {
   const userId = await getBotUserId(req)
   if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
-  const { id, status } = await req.json()
-  if (!id || !status) return NextResponse.json({ error: 'id and status required' }, { status: 400 })
+  const { id, status, time } = await req.json()
+  if (!id || (!status && !time)) return NextResponse.json({ error: 'id and status or time required' }, { status: 400 })
 
-  await prisma.task.updateMany({ where: { id, userId }, data: { status } })
+  const updateData: { status?: string; time?: string } = {}
+  if (status) updateData.status = status
+  if (time)   updateData.time   = time
+  await prisma.task.updateMany({ where: { id, userId }, data: updateData })
   return NextResponse.json({ ok: true })
 }
 

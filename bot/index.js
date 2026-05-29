@@ -70,7 +70,7 @@ const MAX_TASKS   = 9999;
 const MEETING_KEYWORDS = ['toplantı', 'görüşme', 'meet', 'meeting', '1:1', 'call'];
 const TASK_MIN_M  = 30;   // minimum task block in minutes
 const TASK_MAX_M  = 90;   // maximum task block in minutes
-const PRE_REMIND  = 10;   // pre-reminder lead time in minutes
+const PRE_REMIND  = 5;    // pre-reminder lead time in minutes
 
 const DAY_KEYS    = ['pazar','pazartesi','salı','çarşamba','perşembe','cuma','cumartesi'];
 const DAY_LABELS  = { 0:'Pazar',1:'Pazartesi',2:'Salı',3:'Çarşamba',4:'Perşembe',5:'Cuma',6:'Cumartesi' };
@@ -1829,22 +1829,6 @@ setInterval(() => {
   const now = nowHH();
 
   for (const task of tasks.filter(t => t.status === 'pending')) {
-    // 10 min pre-reminder
-    const preKey = `pre:${task.id}:${task.time}`;
-    if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
-      firedKeys.add(preKey);
-      send(`${task.time} → ${task.title} — 10 dakikan var.`);
-      console.log(`[PRE] ${task.title}`);
-    }
-
-    // On-time notification — exactly at task time
-    const onTimeKey = `ontime:${task.id}:${task.time}`;
-    if (!firedKeys.has(onTimeKey) && now === task.time) {
-      firedKeys.add(onTimeKey);
-      send(`🔔 ${task.time} — ${task.title}`);
-      console.log(`[ONTIME] ${task.title}`);
-    }
-
     // Completion check 10 min after task time
     const fireKey = `fire:${task.id}:${task.time}`;
     if (!firedKeys.has(fireKey) && now === addMins(task.time, 10)) {
@@ -1990,6 +1974,60 @@ bot.on('callback_query', async query => {
     const option = data.slice('MEETING_RESCHEDULE:'.length);
     const label  = option === 'today' ? 'bugün sonraya' : option === 'tomorrow' ? 'yarın sabaha' : 'haftaya';
     send(`Tamam. ${label} not aldım.`);
+    return;
+  }
+
+  // ── Railway cron ontime callbacks ─────────────────────────────────────────
+  if (data.startsWith('RAIL_DONE:')) {
+    const taskId = data.slice('RAIL_DONE:'.length);
+    const task   = tasks.find(t => t.id === taskId);
+    if (task) {
+      task.status = 'done';
+      pendingCompletionChecks.delete(task.id);
+      const habitResult = updateHabitStreak(task.title, true);
+      const habitMsg    = habitMilestoneMsg(habitResult);
+      send(`✅ ${task.title} tamamlandı.${habitMsg}`);
+      console.log(`[RAIL_DONE] ${task.title}`);
+    } else {
+      send('✅ Görev tamamlandı olarak işaretlendi.');
+    }
+    dbAdapter?.updateTaskStatus(taskId, 'done');
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+    return;
+  }
+
+  if (data.startsWith('RAIL_NOTDONE:')) {
+    const taskId = data.slice('RAIL_NOTDONE:'.length);
+    const task   = tasks.find(t => t.id === taskId);
+    if (task) {
+      task.postponeCount = (task.postponeCount || 0) + 1;
+      recordDailyPostponed(task.title);
+    }
+    send('📌 Görev beklemede bırakıldı.');
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
+    return;
+  }
+
+  if (data.startsWith('RAIL_POSTPONE:')) {
+    // format: RAIL_POSTPONE:HH:MM:taskId
+    const parts       = data.split(':');
+    const currentTime = `${parts[1]}:${parts[2]}`;
+    const taskId      = parts.slice(3).join(':');
+    const newTime     = addMins(currentTime, 30);
+    const task        = tasks.find(t => t.id === taskId);
+    if (task) {
+      const old = task.time;
+      firedKeys.delete(`fire:${task.id}:${old}`);
+      firedKeys.delete(`pre:${task.id}:${old}`);
+      firedKeys.delete(`ontime:${task.id}:${old}`);
+      pendingCompletionChecks.delete(task.id);
+      task.time = newTime;
+      dbAdapter?.syncTask(task);
+    } else {
+      dbAdapter?.rescheduleTask(taskId, newTime);
+    }
+    send(`⏰ Görev 30 dakika ertelendi → ${newTime}`);
+    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
     return;
   }
 

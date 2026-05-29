@@ -20,6 +20,33 @@ function addMins(hhmm: string, n: number): string {
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`
 }
 
+// GET /api/cron/reminders — diagnostic snapshot
+export async function GET(req: Request) {
+  const tz      = DEFAULT_TZ
+  const today   = todayInTz(tz)
+  const now     = nowHHInTz(tz)
+  const target  = addMins(now, PRE_REMIND)
+
+  const [totalTasks, todayTasks, recentTasks, users] = await Promise.all([
+    prisma.task.count(),
+    prisma.task.findMany({ where: { date: today }, orderBy: { time: 'asc' } }),
+    prisma.task.findMany({ take: 5, orderBy: { createdAt: 'desc' } }),
+    prisma.userSettings.findMany({
+      where: { notifyTelegram: true, telegramToken: { not: null }, telegramChatId: { not: null } },
+      select: { userId: true, telegramChatId: true, timezone: true },
+    }),
+  ])
+
+  return NextResponse.json({
+    serverTime:   { utc: new Date().toISOString(), tz, today, now, targetTime: target },
+    db:           { totalTasks, todayCount: todayTasks.length },
+    todayTasks:   todayTasks.map(t => ({ id: t.id, userId: t.userId, time: t.time, status: t.status, title: t.title, date: t.date })),
+    recentTasks:  recentTasks.map(t => ({ id: t.id, userId: t.userId, date: t.date, time: t.time, title: t.title, createdAt: t.createdAt })),
+    users:        users.map(u => ({ userId: u.userId, telegramChatId: u.telegramChatId ? 'dolu' : 'BOŞ', timezone: u.timezone })),
+    userIdMatch:  users.length && recentTasks.length ? users.some(u => u.userId === recentTasks[0].userId) : null,
+  })
+}
+
 export async function POST(req: Request) {
   const secret = req.headers.get('x-cron-secret')
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {

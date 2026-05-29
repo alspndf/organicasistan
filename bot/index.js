@@ -1645,34 +1645,53 @@ async function executeTool(name, input) {
     }
 
     case 'list_students': {
-      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
+      // Önce Sheets KİŞİLER sekmesini oku
+      try {
+        const { google } = require('googleapis');
+        const saEmail = process.env.GOOGLE_SA_EMAIL;
+        const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+        if (saEmail && saKey) {
+          const auth   = new google.auth.JWT(saEmail, null, saKey, ['https://www.googleapis.com/auth/spreadsheets.readonly']);
+          const sheets = google.sheets({ version: 'v4', auth });
+          const res    = await sheets.spreadsheets.values.get({ spreadsheetId: SHEETS_ID, range: 'KİŞİLER!A:H' });
+          const rows   = res.data.values || [];
+          const firstCell = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
+          const dataRows  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCell) ? rows.slice(1) : rows;
+          if (dataRows.length) {
+            const lines = [`👥 KİŞİLER (${dataRows.length} kişi):\n`];
+            for (const r of dataRows) {
+              if (!r[0]) continue;
+              const isim      = r[0] || '';
+              const sonGorusme = r[2] || '-';
+              const bekleyen  = r[4] || '-';
+              lines.push(`${isim} | Son görüşme: ${sonGorusme} | Bekleyen: ${bekleyen}`);
+            }
+            return lines.join('\n');
+          }
+        }
+      } catch (e) {
+        console.error('[list_students] Sheets okuma hatası:', e.message);
+      }
+      // Sheets boşsa iç DB'ye düş
+      if (!studentsModule) return '📋 KİŞİLER sekmesi boş ve öğrenci modülü yok.';
       const list = studentsModule.loadStudents();
-      if (!list.length) return '📋 Henüz öğrenci kaydı yok. "add_student" ile ekle.';
+      if (!list.length) return '📋 Henüz kayıt yok.';
       const filtered = input.group
         ? list.filter(s => s.group?.toLowerCase().includes(input.group.toLowerCase()))
         : list;
       if (!filtered.length) return `❌ "${input.group}" grubunda öğrenci yok.`;
       const activity = studentsModule.loadActivity();
-      const today = todayISO();
       const lines = [`👥 ${filtered.length} öğrenci:\n`];
       const byGroup = {};
-      for (const s of filtered) {
-        const g = s.group || 'Grup yok';
-        (byGroup[g] = byGroup[g] || []).push(s);
-      }
+      for (const s of filtered) { (byGroup[s.group || 'Grup yok'] = byGroup[s.group || 'Grup yok'] || []).push(s); }
       for (const [grp, students] of Object.entries(byGroup)) {
         lines.push(`📁 ${grp}`);
         for (const s of students) {
-          const act = activity[s.phone] || {};
-          const lastDate = act.lastMessageDate;
-          const daysSilent = lastDate
-            ? Math.max(0, Math.floor((Date.now() - new Date(lastDate + 'T00:00:00').getTime()) / 86400000))
+          const act = studentsModule.loadActivity()[s.phone] || {};
+          const daysSilent = act.lastMessageDate
+            ? Math.max(0, Math.floor((Date.now() - new Date(act.lastMessageDate + 'T00:00:00').getTime()) / 86400000))
             : 999;
-          const status = daysSilent === 999 ? '❓ hiç mesaj yok'
-            : daysSilent === 0 ? '🟢 bugün aktif'
-            : daysSilent === 1 ? '🟡 dün aktif'
-            : daysSilent <= 3 ? `🟠 ${daysSilent}g sessiz`
-            : `🔴 ${daysSilent === 999 ? '??' : daysSilent}g sessiz`;
+          const status = daysSilent === 999 ? '❓ hiç mesaj yok' : daysSilent === 0 ? '🟢 bugün aktif' : `🟠 ${daysSilent}g sessiz`;
           lines.push(`  ${s.name} · ${status}`);
         }
       }

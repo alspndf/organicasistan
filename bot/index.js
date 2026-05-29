@@ -1662,9 +1662,13 @@ async function executeTool(name, input) {
             for (const r of dataRows) {
               if (!r[0]) continue;
               const isim      = r[0] || '';
-              const sonGorusme = r[2] || '-';
-              const bekleyen  = r[4] || '-';
-              lines.push(`${isim} | Son görüşme: ${sonGorusme} | Bekleyen: ${bekleyen}`);
+              const sonGorusme = r[2] || '-';   // C
+              const anaKonu   = r[3] || '-';    // D
+              const bekleyen  = r[4] || '-';    // E
+              const sonrakiAdim = r[6] || '-';  // G
+              lines.push(`${isim}`);
+              lines.push(`  Son görüşme: ${sonGorusme} | Konu: ${anaKonu}`);
+              lines.push(`  Bekleyen: ${bekleyen} | Sonraki adım: ${sonrakiAdim}`);
             }
             return lines.join('\n');
           }

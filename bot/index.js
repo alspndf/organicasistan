@@ -588,7 +588,7 @@ NOT: [önemli detay varsa yaz, yoksa boş bırak]`,
 
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
-const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
+const nowHH  = () => new Date().toLocaleTimeString('sv-SE', { timeZone: TZ }).slice(0, 5);
 
 function parseTime(raw) {
   if (!raw) return null;
@@ -1516,7 +1516,7 @@ async function executeTool(name, input) {
       const t = nowHH();
       const d = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
       const day = DAY_LABELS[todayDayIndex()] || '';
-      return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — İstanbul saati`;
+      return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — ${TZ}`;
     }
 
     case 'get_calendar_events': {
@@ -1830,16 +1830,27 @@ async function runAgent(userText) {
 }
 
 // ─── Scheduler (30s) ─────────────────────────────────────────────────────────
+let _lastSchedulerMinute = '';
 setInterval(() => {
-  const now = nowHH();
+  const now = nowHH(); // sv-SE → always "HH:MM"
+
+  // Log once per minute so we can verify the clock is correct
+  if (now !== _lastSchedulerMinute) {
+    _lastSchedulerMinute = now;
+    const pending = tasks.filter(t => t.status === 'pending');
+    console.log(`[SCHEDULER] ${now} | bekleyen görev: ${pending.length} | ${pending.map(t => `${t.time}=${t.title}`).join(', ') || 'yok'}`);
+  }
 
   for (const task of tasks.filter(t => t.status === 'pending')) {
+    const pre5  = addMins(task.time, -PRE_REMIND);  // 5 dk önce
+    const post10 = addMins(task.time, 10);           // 10 dk sonra
+
     // 5-min pre-reminder
     const preKey = `pre:${task.id}:${task.time}`;
-    if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
+    if (!firedKeys.has(preKey) && now === pre5) {
       firedKeys.add(preKey);
       send(`🔔 ${task.time} → ${task.title} — 5 dakikan var.`);
-      console.log(`[PRE] ${task.title}`);
+      console.log(`[PRE] ${task.title} (${task.time})`);
     }
 
     // On-time notification with action buttons
@@ -1854,12 +1865,12 @@ setInterval(() => {
           { label: '⏰ Ertele',       data: `POSTPONE:2h:${task.id}` },
         ]
       );
-      console.log(`[ONTIME] ${task.title}`);
+      console.log(`[ONTIME] ${task.title} (${task.time})`);
     }
 
     // Completion check 10 min after task time
     const fireKey = `fire:${task.id}:${task.time}`;
-    if (!firedKeys.has(fireKey) && now === addMins(task.time, 10)) {
+    if (!firedKeys.has(fireKey) && now === post10) {
       firedKeys.add(fireKey);
       console.log(`[FIRE] ${task.title} (${task.time})`);
       fireCompletionCheck(task);

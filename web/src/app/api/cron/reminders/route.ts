@@ -31,24 +31,22 @@ export async function POST(req: Request) {
     select: { userId: true, timezone: true, telegramToken: true, telegramChatId: true },
   })
 
-  // ── Soru 4: zaman karşılaştırması ──
-  const debugTz = DEFAULT_TZ
-  const debugNow = nowHHInTz(debugTz)
-  const debugToday = todayInTz(debugTz)
-  console.log(`[DEBUG] UTC şu an: ${new Date().toISOString()} | ${debugTz} şu an: ${debugNow} | tarih: ${debugToday}`)
-
-  // ── Soru 2: telegramChatId ──
+  console.log(`[DEBUG] UTC: ${new Date().toISOString()} | ${DEFAULT_TZ}: ${nowHHInTz(DEFAULT_TZ)} | tarih: ${todayInTz(DEFAULT_TZ)}`)
   console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
+
+  // timezone yanlışsa düzelt
   for (const u of users) {
-    console.log(`[USER] userId=${u.userId} | telegramChatId=${u.telegramChatId || 'BOŞ ❌'} | timezone=${u.timezone}`)
-
-    // ── Soru 1: görev sayısı ──
-    const allTasks = await prisma.task.findMany({ where: { userId: u.userId }, orderBy: { date: 'desc' }, take: 5 })
-    console.log(`[TASKS] toplam (son 5): ${allTasks.length}`)
-
-    // ── Soru 3: time formatı ──
-    for (const t of allTasks) {
-      console.log(`[TASKS] ${t.date} | time="${t.time}" | status=${t.status} | title="${t.title}"`)
+    if (u.timezone !== DEFAULT_TZ) {
+      await prisma.userSettings.update({ where: { userId: u.userId }, data: { timezone: DEFAULT_TZ } })
+      console.log(`[USER] timezone güncellendi: ${u.timezone} → ${DEFAULT_TZ} (userId=${u.userId})`)
+    }
+    const todayTasks = await prisma.task.findMany({
+      where: { userId: u.userId, date: todayInTz(DEFAULT_TZ) },
+      orderBy: { time: 'asc' },
+    })
+    console.log(`[TASKS] bugün (${todayInTz(DEFAULT_TZ)}) görev sayısı: ${todayTasks.length}`)
+    for (const t of todayTasks) {
+      console.log(`[TASKS] time="${t.time}" | status=${t.status} | title="${t.title}"`)
     }
   }
 

@@ -33,11 +33,20 @@ export async function POST(req: Request) {
 
   console.log(`[DEBUG] UTC: ${new Date().toISOString()} | ${DEFAULT_TZ}: ${nowHHInTz(DEFAULT_TZ)} | tarih: ${todayInTz(DEFAULT_TZ)}`)
   console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
+  for (const u of users) {
+    console.log(`[USER] userId=${u.userId}`)
+  }
   const totalTasks = await prisma.task.count()
   console.log(`[TASKS] DB toplam görev: ${totalTasks}`)
-  const sampleTasks = await prisma.task.findMany({ take: 3, orderBy: { createdAt: 'desc' } })
-  console.log('[TASK ÖRNEK]', JSON.stringify(sampleTasks[0]))
-  console.log('[TASK ÖRNEK]', JSON.stringify(sampleTasks[1]))
+  const sampleTasks = await prisma.task.findMany({ take: 2, orderBy: { createdAt: 'desc' } })
+  for (const t of sampleTasks) {
+    console.log(`[TASK ÖRNEK] userId=${t.userId} | date=${t.date} | time=${t.time} | title="${t.title}"`)
+  }
+  // userId eşleşiyor mu?
+  if (users.length && sampleTasks.length) {
+    const match = users.some(u => u.userId === sampleTasks[0].userId)
+    console.log(`[USERID MATCH] UserSettings.userId === Task.userId: ${match}`)
+  }
 
   // timezone yanlışsa düzelt
   for (const u of users) {

@@ -1834,6 +1834,29 @@ setInterval(() => {
   const now = nowHH();
 
   for (const task of tasks.filter(t => t.status === 'pending')) {
+    // 5-min pre-reminder
+    const preKey = `pre:${task.id}:${task.time}`;
+    if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
+      firedKeys.add(preKey);
+      send(`🔔 ${task.time} → ${task.title} — 5 dakikan var.`);
+      console.log(`[PRE] ${task.title}`);
+    }
+
+    // On-time notification with action buttons
+    const onTimeKey = `ontime:${task.id}:${task.time}`;
+    if (!firedKeys.has(onTimeKey) && now === task.time) {
+      firedKeys.add(onTimeKey);
+      sendButtons(
+        `⏰ ${task.time} — ${task.title}`,
+        [
+          { label: '✅ Tamamlandı',   data: `DONE:${task.id}` },
+          { label: '❌ Tamamlanmadı', data: `NOTDONE:${task.id}` },
+          { label: '⏰ Ertele',       data: `POSTPONE:2h:${task.id}` },
+        ]
+      );
+      console.log(`[ONTIME] ${task.title}`);
+    }
+
     // Completion check 10 min after task time
     const fireKey = `fire:${task.id}:${task.time}`;
     if (!firedKeys.has(fireKey) && now === addMins(task.time, 10)) {

@@ -31,11 +31,25 @@ export async function POST(req: Request) {
     select: { userId: true, timezone: true, telegramToken: true, telegramChatId: true },
   })
 
+  // ── Soru 4: zaman karşılaştırması ──
+  const debugTz = DEFAULT_TZ
+  const debugNow = nowHHInTz(debugTz)
+  const debugToday = todayInTz(debugTz)
+  console.log(`[DEBUG] UTC şu an: ${new Date().toISOString()} | ${debugTz} şu an: ${debugNow} | tarih: ${debugToday}`)
+
+  // ── Soru 2: telegramChatId ──
   console.log(`[USER] Telegram ayarlı kullanıcı sayısı: ${users.length}`)
   for (const u of users) {
-    console.log(`[USER] userId=${u.userId} | telegramToken=${u.telegramToken ? 'dolu ✓' : 'BOŞ ❌'} | telegramChatId=${u.telegramChatId || 'BOŞ ❌'} | timezone=${u.timezone}`)
-    const allTasks = await prisma.task.findMany({ where: { userId: u.userId }, orderBy: { date: 'desc' }, take: 3 })
-    console.log(`[TASKS] userId=${u.userId} toplam (son 3): ${allTasks.length}`, allTasks.map(t => `${t.date} ${t.time} "${t.title}" [${t.status}]`))
+    console.log(`[USER] userId=${u.userId} | telegramChatId=${u.telegramChatId || 'BOŞ ❌'} | timezone=${u.timezone}`)
+
+    // ── Soru 1: görev sayısı ──
+    const allTasks = await prisma.task.findMany({ where: { userId: u.userId }, orderBy: { date: 'desc' }, take: 5 })
+    console.log(`[TASKS] toplam (son 5): ${allTasks.length}`)
+
+    // ── Soru 3: time formatı ──
+    for (const t of allTasks) {
+      console.log(`[TASKS] ${t.date} | time="${t.time}" | status=${t.status} | title="${t.title}"`)
+    }
   }
 
   const fired: { taskId: string; title: string; time: string }[] = []

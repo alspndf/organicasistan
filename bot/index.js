@@ -2816,17 +2816,34 @@ console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİ
       console.warn('[SYS] Rutinler yüklenemedi:', e.message);
     }
 
-    // Load today's Google Calendar events into memory for context
+    // Load today's Google Calendar events into memory + tasks
     try {
       const calEvents = await dbAdapter.getCalendarEvents();
       if (Array.isArray(calEvents) && calEvents.length) {
         const mem = loadMemory();
         mem.calendar_today = calEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
-        // Collect all unique attendee names for person context lookup
         const allAttendees = calEvents.flatMap(e => e.attendees || []);
         mem.calendar_attendees = [...new Set(allAttendees)];
         saveMemory(mem);
         console.log(`[SYS] ${calEvents.length} takvim etkinliği, ${mem.calendar_attendees.length} katılımcı yüklendi.`);
+
+        // Add timed calendar events as tasks so scheduler can remind them
+        let calAdded = 0;
+        for (const ev of calEvents) {
+          if (ev.allDay || !ev.start) continue;
+          const time = parseTime(ev.start);
+          if (!time) continue;
+          const alreadyExists = tasks.some(t =>
+            t.time === time && t.title.toLowerCase().includes(ev.title.toLowerCase().slice(0, 10))
+          );
+          if (alreadyExists) continue;
+          const newId = `cal_${ev.id || Date.now()}_${calAdded}`;
+          const task = { id: newId, title: `📅 ${ev.title}`, time, status: 'pending' };
+          tasks.push(task);
+          calAdded++;
+          console.log(`[SYS] Takvim görevi: ${time} — ${ev.title}`);
+        }
+        if (calAdded) console.log(`[SYS] ${calAdded} takvim etkinliği göreve dönüştürüldü.`);
       }
     } catch (e) {
       console.warn('[SYS] Google Takvim yüklenemedi:', e.message);

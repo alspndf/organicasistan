@@ -29,6 +29,8 @@ const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
 const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
 const TZ             = process.env.BOT_TIMEZONE        || 'Asia/Ho_Chi_Minh';
 const MODEL          = 'claude-sonnet-4-6';
+const MODEL_OPUS     = 'claude-opus-4-5';
+const OPUS_THRESHOLD = 15; // kelime sayısı eşiği
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
   console.error('❌  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID ve ANTHROPIC_API_KEY gerekli.');
@@ -1763,6 +1765,10 @@ async function runAgent(userText) {
   conversationHistory.push({ role: 'user', content: userText });
   trimHistory();
 
+  const wordCount   = userText.trim().split(/\s+/).length;
+  const activeModel = wordCount >= OPUS_THRESHOLD ? MODEL_OPUS : MODEL;
+  if (wordCount >= OPUS_THRESHOLD) console.log(`[MODEL] Opus (${wordCount} kelime)`);
+
   const messages = [...conversationHistory];
 
   for (let round = 0; round < 8; round++) {
@@ -1770,7 +1776,7 @@ async function runAgent(userText) {
     try {
       response = await anthropic.messages.create(
         {
-          model: MODEL,
+          model: activeModel,
           max_tokens: 1024,
           system: [
             { type: 'text', text: buildStaticSystem(), cache_control: { type: 'ephemeral' } },

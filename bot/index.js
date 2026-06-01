@@ -434,38 +434,6 @@ function fireTask(task) {
 const conversationHistory = [];
 const MAX_HISTORY = 20;  // keep more history since it's persisted
 
-// Remove orphaned tool_result blocks (no matching tool_use in previous assistant message)
-function sanitizeHistory(history) {
-  const validToolUseIds = new Set();
-  for (const msg of history) {
-    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'tool_use') validToolUseIds.add(block.id);
-      }
-    }
-  }
-  return history.filter(msg => {
-    if (msg.role === 'user' && Array.isArray(msg.content)) {
-      const hasOrphan = msg.content.some(
-        b => b.type === 'tool_result' && !validToolUseIds.has(b.tool_use_id)
-      );
-      if (hasOrphan) return false;
-    }
-    return true;
-  });
-}
-
-function trimHistory() {
-  // Trim to MAX_HISTORY before sanitizing to avoid spreading a huge array
-  while (conversationHistory.length > MAX_HISTORY) {
-    conversationHistory.shift();
-  }
-  // Remove orphaned tool_result blocks caused by the trim
-  const cleaned = sanitizeHistory([...conversationHistory]);
-  conversationHistory.length = 0;
-  for (const msg of cleaned) conversationHistory.push(msg);
-}
-
 // Debounced history save — only writes to DB 3s after last change
 let _historySaveTimer = null;
 function scheduleSaveHistory() {
@@ -1008,22 +976,23 @@ async function handlePhoto(msg) {
   for (const item of withTime) {
     const t = parseTime(item.time);
     if (slotTaken(t)) continue;
+    if (tasks.length >= MAX_TASKS) break;
     added.push(addTask(item.title, t));
   }
 
   // Items without a time → plan them
-  if (withoutTime.length) {
+  if (withoutTime.length && tasks.length < MAX_TASKS) {
     const plan = await generateDailyPlan(withoutTime.map(i => i.title).join(', '));
     if (plan && plan.length) {
       for (const b of plan) {
         const t = parseTime(b.time);
-        if (!t || slotTaken(t)) continue;
+        if (!t || slotTaken(t) || tasks.length >= MAX_TASKS) continue;
         added.push(addTask(b.title, t));
       }
     }
   }
 
-  if (!added.length) { send('❌ Görev eklenemedi (slot dolu).'); return; }
+  if (!added.length) { send('❌ Görev eklenemedi (slot dolu veya limit aşıldı).'); return; }
   send('✅ Eklendi:\n' + added.map(t => `${t.time} — ${t.title}`).join('\n'));
 }
 
@@ -1072,6 +1041,8 @@ async function executeTool(name, input) {
         }
       }
 
+      if (tasks.filter(x => x.status === 'pending').length >= MAX_TASKS)
+        return `❌ Maksimum ${MAX_TASKS} görev limitine ulaşıldı.`;
       if (slotTaken(t)) return `❌ ${t} saatinde zaten görev var.`;
 
       // WhatsApp source: ask for Telegram confirmation before adding
@@ -1166,12 +1137,14 @@ async function executeTool(name, input) {
     }
 
     case 'create_daily_plan': {
+      if (pendingTasks().length >= MAX_TASKS)
+        return `❌ Plan dolu (${MAX_TASKS} görev). Önce mevcut görevleri tamamlayalım.`;
       const blocks = await generateDailyPlan(input.description);
       if (!blocks || !blocks.length) return '❌ Plan oluşturulamadı.';
       const added = [];
       for (const b of blocks) {
         const t = parseTime(b.time);
-        if (!t || slotTaken(t)) continue;
+        if (!t || slotTaken(t) || tasks.length >= MAX_TASKS) continue;
         added.push(addTask(b.title, t));
       }
       if (!added.length) return '❌ Tüm slotlar dolu.';
@@ -1441,7 +1414,7 @@ async function runAgentFromWA(text, jid) {
 
 async function runAgent(userText) {
   conversationHistory.push({ role: 'user', content: userText });
-  trimHistory();
+  while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
 
   const messages = [...conversationHistory];
 
@@ -1481,7 +1454,7 @@ async function runAgent(userText) {
           }
         }
         conversationHistory.push({ role: 'assistant', content: response.content });
-        trimHistory();
+        while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
         scheduleSaveHistory();
       }
       return;
@@ -1503,7 +1476,7 @@ async function runAgent(userText) {
     const toolResultMsg = { role: 'user', content: toolResults };
     messages.push(toolResultMsg);
     conversationHistory.push(toolResultMsg);
-    trimHistory();
+    while (conversationHistory.length > MAX_HISTORY) conversationHistory.shift();
   }
 
   send(`Üzgünüm ${USER_NAME}, işlem tamamlanamadı. Tekrar dener misiniz?`);
@@ -1544,6 +1517,8 @@ bot.on('callback_query', async query => {
       if (slotTaken(time)) {
         send(`❌ ${time} saatinde zaten başka bir görev var.`);
         waModule?.sendWA(jid, `❌ ${time} saatinde başka görev var.`).catch(() => {});
+      } else if (tasks.filter(x => x.status === 'pending').length >= MAX_TASKS) {
+        send('❌ Görev limiti doldu.');
       } else {
         const task = addTask(title, time);
         send(`✅ WhatsApp görevi eklendi: ${task.time} — ${task.title}`);
@@ -2087,7 +2062,7 @@ console.log('[SYS] Sistem başlatılıyor...');
     try {
       const savedHistory = await dbAdapter.getConversationHistory();
       if (savedHistory && savedHistory.length) {
-        conversationHistory.push(...sanitizeHistory(savedHistory));
+        conversationHistory.push(...savedHistory);
         console.log(`[SYS] ${conversationHistory.length} mesaj geçmişi yüklendi.`);
       }
     } catch (e) {
@@ -2191,13 +2166,13 @@ Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
           const added = [];
           for (const item of withTime) {
             const t = parseTime(item.time);
-            if (t && !slotTaken(t)) added.push(addTask(item.title, t));
+            if (t && !slotTaken(t) && tasks.length < MAX_TASKS) added.push(addTask(item.title, t));
           }
-          if (withoutTime.length) {
+          if (withoutTime.length && tasks.length < MAX_TASKS) {
             const plan = await generateDailyPlan(withoutTime.map(i => i.title).join(', ')).catch(() => null);
             if (plan) for (const b of plan) {
               const t = parseTime(b.time);
-              if (t && !slotTaken(t)) added.push(addTask(b.title, t));
+              if (t && !slotTaken(t) && tasks.length < MAX_TASKS) added.push(addTask(b.title, t));
             }
           }
           const reply = added.length

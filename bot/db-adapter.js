@@ -16,20 +16,15 @@ const HEADERS = {
   'x-bot-user-id': USER_ID,
 };
 
-const BOT_TZ_FOR_DATE = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh';
-const TODAY = () => new Date().toLocaleDateString('sv-SE', { timeZone: BOT_TZ_FOR_DATE });
+const TODAY = () => new Date().toISOString().split('T')[0];
 
 /** Upsert a task into the web app DB (fire-and-forget). */
 function syncTask(task, date) {
-  const taskDate = date || TODAY();
-  console.log(`[DB-Adapter] syncTask: "${task.title}" tarih=${taskDate} id=${task.id}`);
   fetch(`${WEB_URL}/api/bot/tasks`, {
     method:  'POST',
     headers: HEADERS,
-    body:    JSON.stringify({ ...task, date: taskDate }),
-  })
-    .then(r => r.ok ? console.log(`[DB-Adapter] syncTask OK: ${task.id}`) : r.text().then(t => console.warn(`[DB-Adapter] syncTask FAILED ${r.status}:`, t)))
-    .catch(e => console.warn('[DB-Adapter] syncTask error:', e.message));
+    body:    JSON.stringify({ ...task, date: date || TODAY() }),
+  }).catch(e => console.warn('[DB-Adapter] syncTask error:', e.message));
 }
 
 /** Update task status (fire-and-forget). */
@@ -39,15 +34,6 @@ function updateTaskStatus(taskId, status) {
     headers: HEADERS,
     body:    JSON.stringify({ id: taskId, status }),
   }).catch(e => console.warn('[DB-Adapter] updateTaskStatus error:', e.message));
-}
-
-/** Update task time (fire-and-forget). */
-function rescheduleTask(taskId, newTime) {
-  fetch(`${WEB_URL}/api/bot/tasks`, {
-    method:  'PATCH',
-    headers: HEADERS,
-    body:    JSON.stringify({ id: taskId, time: newTime }),
-  }).catch(e => console.warn('[DB-Adapter] rescheduleTask error:', e.message));
 }
 
 /** Delete a task (fire-and-forget). */
@@ -113,16 +99,11 @@ function saveConversationHistory(messages) {
   }).catch(e => console.warn('[DB-Adapter] saveConversationHistory error:', e.message));
 }
 
-const BOT_TZ = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh';
-
 /** Fetch Google Calendar events for a given date. Returns a Promise. */
 async function getCalendarEvents(date) {
   try {
     const d   = date || TODAY();
-    const res = await fetch(
-      `${WEB_URL}/api/bot/calendar?date=${d}&tz=${encodeURIComponent(BOT_TZ)}`,
-      { headers: HEADERS }
-    );
+    const res = await fetch(`${WEB_URL}/api/bot/calendar?date=${d}`, { headers: HEADERS });
     if (!res.ok) return [];
     return await res.json();
   } catch (e) {
@@ -131,27 +112,9 @@ async function getCalendarEvents(date) {
   }
 }
 
-/** Lookup attendee names in Google Sheets KİŞİLER tab. Returns person context string. */
-async function getPersonContext(names) {
-  if (!names || !names.length) return 'YOK';
-  try {
-    const res = await fetch(`${WEB_URL}/api/sheets/person-context`, {
-      method:  'POST',
-      headers: HEADERS,
-      body:    JSON.stringify({ names }),
-    });
-    if (!res.ok) return 'YOK';
-    const data = await res.json();
-    return data.context || 'YOK';
-  } catch (e) {
-    console.warn('[DB-Adapter] getPersonContext error:', e.message);
-    return 'YOK';
-  }
-}
-
 module.exports = {
-  syncTask, updateTaskStatus, rescheduleTask, deleteTask, getTodayTasks,
+  syncTask, updateTaskStatus, deleteTask, getTodayTasks,
   saveRoutine, getRoutines,
   getConversationHistory, saveConversationHistory,
-  getCalendarEvents, getPersonContext,
+  getCalendarEvents,
 };

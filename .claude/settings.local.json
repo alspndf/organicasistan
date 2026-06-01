@@ -14,7 +14,8 @@
       "Bash(git push:*)",
       "Read(//Users/alperenkocaman/jarvis/**)",
       "Bash(openssl req:*)",
-      "Bash(npx prisma:*)"
+      "Bash(npx prisma:*)",
+      "Bash(xargs cat *)"
     ]
   }
 }

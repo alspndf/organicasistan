@@ -16,20 +16,19 @@ export function getAuthUrl(redirectUri: string) {
     prompt:      'consent',
     scope: [
       'https://www.googleapis.com/auth/calendar.readonly',
-      'https://www.googleapis.com/auth/spreadsheets.readonly',
       'https://www.googleapis.com/auth/userinfo.email',
     ],
   })
 }
 
-export async function getCalendarEvents(userId: string, date: string, tzOverride?: string) {
+export async function getCalendarEvents(userId: string, date: string) {
   const [token, settings] = await Promise.all([
     prisma.googleCalendarToken.findUnique({ where: { userId } }),
     prisma.userSettings.findUnique({ where: { userId }, select: { timezone: true } }),
   ])
   if (!token) return []
 
-  const tz = tzOverride || settings?.timezone || 'Asia/Ho_Chi_Minh'
+  const tz = settings?.timezone || 'Europe/Istanbul'
 
   const client = makeOAuth2Client()
   client.setCredentials({
@@ -51,23 +50,21 @@ export async function getCalendarEvents(userId: string, date: string, tzOverride
 
   const calendar = google.calendar({ version: 'v3', auth: client })
 
-  // Build midnight-to-midnight range expressed as UTC ISO strings
-  // Use Intl to extract the tz offset reliably — avoids the sign bug from manual offset math
-  const [y, m, d] = date.split('-').map(Number)
-  const probe = new Date(`${date}T12:00:00Z`) // noon UTC avoids DST edge cases
-  const offsetStr = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    timeZoneName: 'longOffset',
-  }).formatToParts(probe).find(p => p.type === 'timeZoneName')?.value || 'GMT+00:00'
-  // offsetStr = e.g. "GMT+07:00" for Asia/Ho_Chi_Minh
-  const om = offsetStr.match(/GMT([+-])(\d{2}):(\d{2})/)
-  const tzOffsetMs = om
-    ? (om[1] === '+' ? 1 : -1) * (parseInt(om[2]) * 60 + parseInt(om[3])) * 60000
-    : 0
+  // Build midnight-to-midnight range in user's timezone
+  const dayStart = new Date(`${date}T00:00:00`).toLocaleString('sv-SE', { timeZone: tz }).replace(' ', 'T')
+  const dayEnd   = new Date(`${date}T23:59:59`).toLocaleString('sv-SE', { timeZone: tz }).replace(' ', 'T')
 
-  // Subtract tz offset: UTC+7 → subtract 7h → Ho Chi Minh midnight = 17:00 UTC prev day
-  const timeMin = new Date(Date.UTC(y, m - 1, d,  0,  0,  0,   0) - tzOffsetMs).toISOString()
-  const timeMax = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - tzOffsetMs).toISOString()
+  // Get the UTC offset for the timezone on this date
+  const offsetMs  = new Date(`${date}T12:00:00`).getTime()
+               - new Date(new Date(`${date}T12:00:00`).toLocaleString('en-US', { timeZone: tz })).getTime()
+  const sign      = offsetMs >= 0 ? '+' : '-'
+  const offsetAbs = Math.abs(offsetMs)
+  const offsetHH  = String(Math.floor(offsetAbs / 3600000)).padStart(2, '0')
+  const offsetMM  = String(Math.floor((offsetAbs % 3600000) / 60000)).padStart(2, '0')
+  const tzOffset  = `${sign}${offsetHH}:${offsetMM}`
+
+  const timeMin = `${date}T00:00:00${tzOffset}`
+  const timeMax = `${date}T23:59:59${tzOffset}`
 
   const res = await calendar.events.list({
     calendarId: 'primary',
@@ -79,19 +76,15 @@ export async function getCalendarEvents(userId: string, date: string, tzOverride
   })
 
   return (res.data.items || []).map(e => ({
-    id:        e.id,
-    title:     e.summary || '(başlıksız)',
-    start:     e.start?.dateTime
+    id:       e.id,
+    title:    e.summary || '(başlıksız)',
+    start:    e.start?.dateTime
       ? new Date(e.start.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: tz })
       : 'Tüm gün',
-    end:       e.end?.dateTime
+    end:      e.end?.dateTime
       ? new Date(e.end.dateTime).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: tz })
       : '',
-    location:  e.location || null,
-    allDay:    !e.start?.dateTime,
-    attendees: (e.attendees || [])
-      .filter(a => !a.self)
-      .map(a => a.displayName || a.email || '')
-      .filter(Boolean),
+    location: e.location || null,
+    allDay:   !e.start?.dateTime,
   }))
 }

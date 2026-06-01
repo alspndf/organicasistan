@@ -21,8 +21,7 @@ export async function GET(req: NextRequest) {
   const userId = await getBotUserId(req)
   if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
-  const tz   = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
-  const date = req.nextUrl.searchParams.get('date') || new Date().toLocaleDateString('sv-SE', { timeZone: tz })
+  const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().split('T')[0]
 
   const tasks = await prisma.task.findMany({
     where: { userId, date },
@@ -42,8 +41,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json()
   const { id, title, time, date, status } = body
-  const tz2      = process.env.BOT_TIMEZONE || 'Asia/Ho_Chi_Minh'
-  const taskDate = date || new Date().toLocaleDateString('sv-SE', { timeZone: tz2 })
+  const taskDate = date || new Date().toISOString().split('T')[0]
 
   const task = await prisma.task.upsert({
     where:  { id: id || '__new__' },
@@ -69,13 +67,10 @@ export async function PATCH(req: NextRequest) {
   const userId = await getBotUserId(req)
   if (!userId) return NextResponse.json({ error: 'x-bot-user-id header required' }, { status: 400 })
 
-  const { id, status, time } = await req.json()
-  if (!id || (!status && !time)) return NextResponse.json({ error: 'id and status or time required' }, { status: 400 })
+  const { id, status } = await req.json()
+  if (!id || !status) return NextResponse.json({ error: 'id and status required' }, { status: 400 })
 
-  const updateData: { status?: string; time?: string } = {}
-  if (status) updateData.status = status
-  if (time)   updateData.time   = time
-  await prisma.task.updateMany({ where: { id, userId }, data: updateData })
+  await prisma.task.updateMany({ where: { id, userId }, data: { status } })
   return NextResponse.json({ ok: true })
 }
 

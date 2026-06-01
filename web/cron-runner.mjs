@@ -18,7 +18,7 @@ const call = (path) =>
     .catch((e) => console.error(`[CRON] ${path} error:`, e.message))
 
 // 09:00 — daily plan summary via Telegram
-cron.schedule('0 9 * * *', () => call('/api/cron/daily-plan'), { timezone: 'Asia/Ho_Chi_Minh' })
+cron.schedule('0 9 * * *', () => call('/api/cron/daily-plan'), { timezone: 'Europe/Istanbul' })
 
 // Every minute — fire pending reminders
 cron.schedule('* * * * *', () => call('/api/cron/reminders'))
@@ -26,4 +26,4 @@ cron.schedule('* * * * *', () => call('/api/cron/reminders'))
 // Every hour — email check for configured users
 cron.schedule('0 * * * *', () => call('/api/cron/email-check'))
 
-console.log('[CRON] Runner started. Jobs: daily-plan(09:00 Ho_Chi_Minh), reminders(1min), email-check(hourly)')
+console.log('[CRON] Runner started. Jobs: daily-plan(09:00 Istanbul), reminders(1min), email-check(hourly)')

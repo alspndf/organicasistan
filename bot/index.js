@@ -27,10 +27,8 @@ const CHAT_ID       = process.env.TELEGRAM_CHAT_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const USER_NAME      = process.env.BOT_USER_NAME      || 'Kullanıcı';
 const ASSISTANT_NAME = process.env.BOT_ASSISTANT_NAME || 'Yeliz';
-const TZ             = process.env.BOT_TIMEZONE        || 'Asia/Ho_Chi_Minh';
+const TZ             = process.env.BOT_TIMEZONE        || 'Europe/Istanbul';
 const MODEL          = 'claude-sonnet-4-6';
-const MODEL_OPUS     = 'claude-opus-4-5';
-const OPUS_THRESHOLD = 15; // kelime sayısı eşiği
 
 if (!TOKEN || !CHAT_ID || !ANTHROPIC_KEY) {
   console.error('❌  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID ve ANTHROPIC_API_KEY gerekli.');
@@ -41,16 +39,15 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const bot       = new TelegramBot(TOKEN, { polling: true });
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let tasks       = [];          // { id, title, time, status: 'pending'|'done', postponeCount? }
+let tasks       = [];          // { id, title, time, status: 'pending'|'done' }
 let routines    = [];          // { id, text, time } — loaded from DB on startup
 let idCounter   = 1;
 const firedKeys = new Set();   // prevent double-firing
-// Tracks unanswered completion checks: taskId → { sentAt, secondSent }
-const pendingCompletionChecks = new Map();
 let pendingReschedule          = null;  // task.id waiting for a new time from user
 let pendingDeleteIds           = [];    // task IDs awaiting delete confirmation
 let pendingAnalysisReschedule  = null;  // [{title,time}] incomplete tasks awaiting tomorrow confirm
-let lastMessageAt = Date.now(); // used for conversation tracking
+let lastMessageAt = Date.now(); // inactivity tracking
+let inactivityFired = false;    // prevent repeated pings per silence window
 
 // WhatsApp state
 let waModule              = null;  // loaded lazily if WA is enabled
@@ -62,14 +59,8 @@ let studentsModule = null;
 try { studentsModule = require('./students'); } catch {}
 const _pendingStudentMsgs = new Map(); // shortId → { phone, draft }
 
-// Meeting post-flow state
-const firedMeetingKeys = new Set();  // prevent double-firing per event
-let pendingMeetingFlow  = null;       // { eventId, eventTitle, attendees, stage }
-let awaitingExtraTask  = false;       // after morning briefing: ask for extra tasks
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_TASKS   = 9999;
-const MEETING_KEYWORDS = ['toplantı', 'görüşme', 'meet', 'meeting', '1:1', 'call'];
 const TASK_MIN_M  = 30;   // minimum task block in minutes
 const TASK_MAX_M  = 90;   // maximum task block in minutes
 const PRE_REMIND  = 5;    // pre-reminder lead time in minutes
@@ -332,265 +323,9 @@ async function getWeather() {
   });
 }
 
-// ─── Name normalization for fuzzy matching ────────────────────────────────────
-function normalizeName(name) {
-  return (name || '')
-    .replace(/İ/g, 'i').replace(/I/g, 'i')
-    .toLowerCase()
-    .replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ı/g, 'i')
-    .replace(/ğ/g, 'g').replace(/ş/g, 's').replace(/ç/g, 'c')
-    .trim();
-}
-
-// Matches "Ömer Can" ↔ "Ömercan", "Ömer" ↔ "Ömer Can", etc.
-function namesMatch(a, b) {
-  const na = normalizeName(a);
-  const nb = normalizeName(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  // Without spaces: "Ömer Can" → "omercan" matches "Ömercan" → "omercan"
-  const ca = na.replace(/\s+/g, '');
-  const cb = nb.replace(/\s+/g, '');
-  if (ca === cb) return true;
-  // Token overlap: any word of a found in b's words (length ≥ 3)
-  const tokA = na.split(/\s+/).filter(t => t.length >= 3);
-  const tokB = nb.split(/\s+/).filter(t => t.length >= 3);
-  if (tokA.length && tokB.length && tokA.some(t => tokB.includes(t))) return true;
-  // Containment (no-space form): "omer" ↔ "omercan"
-  if (ca.length >= 3 && cb.length >= 3 && (ca.includes(cb) || cb.includes(ca))) return true;
-  return false;
-}
-
-// ─── Google Sheets: kişi bağlamı (service account) ───────────────────────────
-const SHEETS_ID = process.env.SHEETS_ID || '1DW3bbhhbBrC6VSohdskedhb_iVDI-VJO_FOjB1nRAkc';
-
-async function getPersonContext(attendeeNames) {
-  const saEmail = process.env.GOOGLE_SA_EMAIL;
-  const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-  console.log(`[SHEETS] getPersonContext — SA email: ${saEmail ? saEmail : 'EKSİK'}, key: ${saKey ? 'yüklü' : 'EKSİK'}`);
-  if (!saEmail || !saKey) {
-    console.warn('[SHEETS] getPersonContext: GOOGLE_SA_EMAIL veya GOOGLE_SA_PRIVATE_KEY eksik');
-    return 'YOK';
-  }
-  const raw   = Array.isArray(attendeeNames) ? attendeeNames : [attendeeNames];
-  const names = raw.map(n => (n || '').trim()).filter(Boolean);
-  console.log(`[SHEETS] getPersonContext — aranacak isimler: [${names.join(', ')}]`);
-  if (!names.length) return 'YOK';
-  try {
-    const { google } = require('googleapis');
-    const auth = new google.auth.JWT(saEmail, null, saKey, [
-      'https://www.googleapis.com/auth/spreadsheets.readonly',
-    ]);
-    const sheets = google.sheets({ version: 'v4', auth });
-    console.log(`[SHEETS] getPersonContext — Sheets API isteği gönderiliyor... (ID: ${SHEETS_ID})`);
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEETS_ID,
-      range: 'KİŞİLER!A:H',
-    });
-    const rows     = res.data.values || [];
-    const firstCell = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
-    const isHeader  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCell);
-    const dataRows  = isHeader ? rows.slice(1) : rows;
-    console.log(`[SHEETS] getPersonContext — ${dataRows.length} satır okundu`);
-    const matches  = [];
-    for (const name of names) {
-      const row = dataRows.find(r => r[0] && namesMatch(r[0], name));
-      if (!row) { console.log(`[SHEETS] getPersonContext — eşleşme yok: "${name}"`); continue; }
-      const [ad, , sonGorusme, anaKonu, bekleyenAksiyonlar, , sonrakiAdim] = row;
-      console.log(`[SHEETS] getPersonContext — eşleşti: "${name}" → "${ad}"`);
-      matches.push(
-        `${ad}\nSon görüşme: ${sonGorusme || '-'}\nKonu: ${anaKonu || '-'}\nBekleyen: ${bekleyenAksiyonlar || '-'}\nSonraki adım: ${sonrakiAdim || '-'}`
-      );
-    }
-    return matches.length ? matches.join('\n\n---\n\n') : 'YOK';
-  } catch (e) {
-    console.error('[SHEETS HATA YERİ] getPersonContext:', e.stack || e.message);
-    return 'YOK';
-  }
-}
-
-// ─── Google Sheets: görev geçmişi ────────────────────────────────────────────
-function makeSheetsClient(readonly = true) {
-  const { google } = require('googleapis');
-  const saEmail = process.env.GOOGLE_SA_EMAIL;
-  const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-  if (!saEmail || !saKey) return null;
-  const scope = readonly
-    ? 'https://www.googleapis.com/auth/spreadsheets.readonly'
-    : 'https://www.googleapis.com/auth/spreadsheets';
-  const auth = new google.auth.JWT(saEmail, null, saKey, [scope]);
-  return google.sheets({ version: 'v4', auth });
-}
-
-async function getTaskHistory(date) {
-  try {
-    const sheets = makeSheetsClient(true);
-    if (!sheets) return [];
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEETS_ID,
-      range: 'GÖREV GEÇMİŞİ!A:G',
-    });
-    const rows = res.data.values || [];
-    return rows.filter(r => r[0] === date);
-  } catch (e) {
-    console.error('[SHEETS HATA YERİ] getTaskHistory:', e.stack || e.message);
-    return [];
-  }
-}
-
-async function writeTaskHistory(rows) {
-  if (!rows || !rows.length) return;
-  try {
-    const sheets = makeSheetsClient(false);
-    if (!sheets) return;
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEETS_ID,
-      range: 'GÖREV GEÇMİŞİ!A:G',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: rows },
-    });
-    console.log(`[SHEETS] ${rows.length} satır GÖREV GEÇMİŞİ'ne yazıldı.`);
-  } catch (e) {
-    console.error('[SHEETS HATA YERİ] writeTaskHistory:', e.stack || e.message);
-  }
-}
-
-// ─── Google Sheets: KİŞİLER upsert (toplantı sonrası) ────────────────────────
-async function upsertPersonInSheets(personName, { sonGorusme, anaKonu, bekleyenAksiyonlar, sonrakiAdim, notText }) {
-  const sheets = makeSheetsClient(false);
-  if (!sheets) { console.warn('[SHEETS] upsertPersonInSheets: SA credentials eksik'); return false; }
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEETS_ID,
-      range: 'KİŞİLER!A:H',
-    });
-    const rows      = res.data.values || [];
-    const firstCellU = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
-    const hasHeader  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCellU);
-    const dataRows   = hasHeader ? rows.slice(1) : rows;
-    const rowOffset  = hasHeader ? 2 : 1;
-    const idx = dataRows.findIndex(r => r[0] && namesMatch(r[0], personName));
-
-    if (idx !== -1) {
-      const rowNum = idx + rowOffset;
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SHEETS_ID,
-        requestBody: {
-          valueInputOption: 'USER_ENTERED',
-          data: [
-            { range: `KİŞİLER!C${rowNum}`, values: [[sonGorusme]] },
-            { range: `KİŞİLER!D${rowNum}`, values: [[anaKonu]] },
-            { range: `KİŞİLER!E${rowNum}`, values: [[bekleyenAksiyonlar]] },
-            { range: `KİŞİLER!G${rowNum}`, values: [[sonrakiAdim || '']] },
-            { range: `KİŞİLER!H${rowNum}`, values: [[notText || '']] },
-          ],
-        },
-      });
-      console.log(`[SHEETS] KİŞİLER güncellendi: ${personName} (satır ${rowNum})`);
-    } else {
-      // New person — build A:H row (8 columns)
-      const newRow = ['', '', '', '', '', '', '', ''];
-      newRow[0] = personName;
-      newRow[2] = sonGorusme;
-      newRow[3] = anaKonu;
-      newRow[4] = bekleyenAksiyonlar;
-      newRow[6] = sonrakiAdim || '';
-      newRow[7] = notText || '';
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEETS_ID,
-        range: 'KİŞİLER!A:H',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [newRow] },
-      });
-      console.log(`[SHEETS] KİŞİLER yeni satır: ${personName}`);
-    }
-    return true;
-  } catch (e) {
-    console.error('[SHEETS HATA YERİ] upsertPersonInSheets:', e.stack || e.message);
-    return false;
-  }
-}
-
-// Parse the structured AI summary response
-function parseMeetingSummary(text) {
-  const result = { anaKonu: '', bekleyenAksiyonlar: '', kritiklik: '', sonrakiAdim: '', notText: '' };
-  const aksiyonlar = [];
-  let mode = null;
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    if (!t) { if (mode === 'aksiyon') mode = null; continue; }
-    if      (t.startsWith('ANA KONU:'))            { result.anaKonu     = t.slice('ANA KONU:'.length).trim(); mode = null; }
-    else if (t.startsWith('BEKLEYEN AKSİYONLAR:')) { mode = 'aksiyon'; }
-    else if (t.startsWith('KRİTİKLİK:'))           { result.kritiklik   = t.slice('KRİTİKLİK:'.length).trim(); mode = null; }
-    else if (t.startsWith('SONRAKİ ADIM:'))        { result.sonrakiAdim = t.slice('SONRAKİ ADIM:'.length).trim(); mode = null; }
-    else if (t.startsWith('NOT:'))                 { result.notText     = t.slice('NOT:'.length).trim(); mode = null; }
-    else if (mode === 'aksiyon' && t.startsWith('-')) { aksiyonlar.push(t.slice(1).trim()); }
-  }
-  result.bekleyenAksiyonlar = aksiyonlar.join('\n');
-  return result;
-}
-
-// Node 5-7: receive user summary → Claude → Sheets → confirm
-async function handleMeetingSummary(userText) {
-  const flow = pendingMeetingFlow;
-  pendingMeetingFlow = null;
-
-  const personName = (flow.attendees || [])[0] || flow.eventTitle;
-  const today      = todayISO();
-
-  let summaryText;
-  try {
-    const r = await anthropic.messages.create({
-      model: MODEL, max_tokens: 400,
-      system: `Sen Alp'in icra asistanısın. Adın Yeliz.\nKısa yaz. Markdown kullanma. Düz metin.`,
-      messages: [{
-        role: 'user',
-        content:
-`Toplantı kişisi: ${personName}
-Tarih: ${today}
-Ham özet: ${userText}
-
-Şu formatı doldur, sadece bunu yaz, açıklama ekleme:
-
-ANA KONU: [1 cümle]
-BEKLEYEN AKSİYONLAR:
-- [fiil ile başla]
-- [fiil ile başla]
-KRİTİKLİK: [bu hafta / bu ay / takipte]
-SONRAKİ ADIM: [tarih varsa yaz, yoksa boş bırak]
-NOT: [önemli detay varsa yaz, yoksa boş bırak]`,
-      }],
-    });
-    summaryText = r.content[0].text.trim();
-  } catch (e) {
-    console.error('[MEETING] AI özet hatası:', e.message);
-    send('❌ Özet işlenemedi. Tekrar dener misin?');
-    return;
-  }
-
-  const parsed = parseMeetingSummary(summaryText);
-
-  await upsertPersonInSheets(personName, {
-    sonGorusme:         today,
-    anaKonu:            parsed.anaKonu,
-    bekleyenAksiyonlar: parsed.bekleyenAksiyonlar,
-    sonrakiAdim:        parsed.sonrakiAdim,
-    notText:            parsed.notText,
-  });
-
-  const aksiyonLines = parsed.bekleyenAksiyonlar
-    ? parsed.bekleyenAksiyonlar.split('\n').filter(Boolean).map(l => `- ${l}`).join('\n')
-    : '(yok)';
-  let confirmMsg = `${personName} kartı güncellendi.\n\nBekleyen:\n${aksiyonLines}`;
-  if (parsed.sonrakiAdim) confirmMsg += `\n\nSonraki adım: ${parsed.sonrakiAdim}`;
-
-  send(confirmMsg);
-  console.log(`[MEETING] Toplantı özeti tamamlandı: ${personName}`);
-}
-
 // ─── Time utilities (pure math — not NLP) ────────────────────────────────────
 const pad    = n => String(n).padStart(2, '0');
-const nowHH  = () => new Date().toLocaleTimeString('sv-SE', { timeZone: TZ }).slice(0, 5);
+const nowHH  = () => new Date().toLocaleTimeString('tr-TR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).replace('.', ':');
 
 function parseTime(raw) {
   if (!raw) return null;
@@ -663,22 +398,7 @@ function planText() {
 }
 
 // ─── Telegram helpers ─────────────────────────────────────────────────────────
-function stripMarkdown(text) {
-  return (text || '')
-    .replace(/\*\*\*(.+?)\*\*\*/gs, '$1')   // ***bold italic***
-    .replace(/\*\*(.+?)\*\*/gs, '$1')        // **bold**
-    .replace(/__(.+?)__/gs, '$1')            // __bold__
-    .replace(/\*(.+?)\*/gs, '$1')            // *italic*
-    .replace(/_([^_\n]+?)_/gs, '$1')         // _italic_
-    .replace(/~~(.+?)~~/gs, '$1')            // ~~strikethrough~~
-    .replace(/`{3}[\s\S]*?`{3}/g, '')        // ```code blocks```
-    .replace(/`(.+?)`/g, '$1')              // `inline code`
-    .replace(/^#{1,6}\s+/gm, '')            // # headers
-    .replace(/^\s*[-*+]\s+/gm, '- ')        // normalize list bullets
-    .trim();
-}
-
-const send = text => bot.sendMessage(CHAT_ID, stripMarkdown(text));
+const send = text => bot.sendMessage(CHAT_ID, text);
 
 // Send to Telegram and/or WhatsApp based on WA_NOTIFY_CHANNEL env
 function notifyAll(text) {
@@ -691,7 +411,7 @@ function notifyAll(text) {
 }
 
 function sendButtons(text, buttons) {
-  return bot.sendMessage(CHAT_ID, stripMarkdown(text), {
+  return bot.sendMessage(CHAT_ID, text, {
     reply_markup: {
       inline_keyboard: [
         buttons.map(b => ({ text: b.label, callback_data: b.data }))
@@ -700,14 +420,12 @@ function sendButtons(text, buttons) {
   });
 }
 
-function fireCompletionCheck(task) {
-  pendingCompletionChecks.set(task.id, { sentAt: Date.now(), secondSent: false });
+function fireTask(task) {
   return sendButtons(
-    `${task.title} tamamlandı mı?`,
+    `⏰ ${USER_NAME}, sıradaki göreviniz!\n\n📌 ${task.title}\n\nTamamladınız mı?`,
     [
-      { label: '✅ Evet',   data: `DONE:${task.id}` },
-      { label: '❌ Hayır',  data: `NOTDONE:${task.id}` },
-      { label: '⏭ Ertele', data: `POSTPONE:2h:${task.id}` },
+      { label: '✅ Yaptım',   data: `DONE:${task.id}` },
+      { label: '❌ Yapmadım', data: `NOTDONE:${task.id}` },
     ]
   );
 }
@@ -762,64 +480,52 @@ function scheduleSaveHistory() {
 function buildStaticSystem() {
   const mem = loadMemory();
 
-  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel icra asistanısın.
-Görevin günlük operasyonları yönetmek, önceliklendirmek ve hayatını kolaylaştırmak.
+  let sys = `Sen ${ASSISTANT_NAME}'sin — ${USER_NAME}'in kişisel asistanı. Samimi, zeki, proaktif ve çok yeteneklisin.
 
-## Temel Kurallar
-- Dil: Türkçe. Samimi ama profesyonel.
-- Kısa yaz. Telefonda kolayca taranabilecek uzunluk.
-- Liste değil, karar ver. "3 toplantın var" değil, "odak zamanın kısıtlı, şunu öne al" de.
-- Tek seferde tek soru sor. Cevabı al, devam et.
-- Emojileri işaret olarak kullan: 🔴 Kritik/Aksiyon, 🟡 Önemli/Bekleyebilir, ✅ Tamamlandı, ⏭ Ertelendi, 📅 Takvim, 📧 Mail
+## Yapabileceklerin (kullanıcı istemese bile proaktif öner)
+1. 🧠 Mesaj Yönetimi — yazdığı mesajları düzenler, kısaltır, profesyonelleştirir, cevap hazırlar
+2. 📅 Planlama & Takvim — günlük/haftalık plan oluşturur, hatırlatmalar kurar
+3. 🔔 Hatırlatma Sistemi — belirtilen zamanlarda görevleri hatırlatır
+4. 📂 Not & Bilgi Düzenleme — karışık notları düzenler, özetler, anlaşılır hale getirir
+5. 🔎 Hızlı Araştırma — basit konularda araştırma yapar, kısa net bilgi sunar
+6. 🧾 Metin Üretimi — caption, açıklama, başlık, kısa yazılar üretir
+7. 🌍 Çeviri — Türkçe, İngilizce ve diğer diller arasında çeviri yapar
+8. 🔄 Tekrar Eden İşleri Kolaylaştırma — sık yapılan işleri otomatikleştirir, template oluşturur
+9. 📊 Özetleme — uzun metinleri ve konuşmaları kısa özetler
+10. 🗂 Organizasyon — günlük işleri düzenler, öncelik sıralaması yapar
+11. ⚙️ Süreç Takibi — yapılması gereken işleri takip eder, eksikleri hatırlatır
+12. 🧠 Karar Destek — seçenekleri analiz eder, artı-eksi listesi çıkarır
+13. 🔑 Proaktif Hatırlatma — kullanıcı söylemese bile eksik/unutulan işleri fark edip hatırlatır
 
-## Zaman Dilimi
-UTC+7 (Vietnam / Ho Chi Minh). Tüm saatler bu zaman dilimine göre hesaplanır.
-Tarihten bahsederken her zaman açıkça belirt: "Bugün [Gün], [Tarih]..."
-
-## Öncelik Hiyerarşisi
-Deadline > Toplantı > Görev > Mail
-Çakışma veya sıkışma olduğunda bu sıraya göre yönlendir. Her zaman somut bir öneride bulun.
-
-## Araçlar ve Görev Yönetimi
+## Davranış Kuralları
 - Araçları kullanarak görevleri gerçek olarak yönet, sadece söz verme
+- Türkçe konuş, doğal ve samimi ol
+- Zaman hakkında konuşurken get_current_time aracını kullan — tahmin etme, ölç
+- Konuşma geçmişini ve ${USER_NAME} hakkında öğrendiklerini her zaman hatırla
+- Proaktif ol: günün durumuna göre öneriler sun, eksik gördüğün şeyleri belirt
 - Görevi silmeden önce onay iste (delete_tasks confirmed:false ile)
-- Takvim işlemleri için get_calendar_events / add_calendar_event kullan
-- E-posta analizi için analyze_emails kullan
-- Zaman için get_current_time kullan — tahmin etme, ölç
-
-## Sistem Durumu — KESİN GERÇEK
-Hatırlatma sistemi TAMAMEN ÇALIŞIYOR. Görev saatinden 5 dakika önce ve tam saatinde Telegram bildirimleri otomatik gönderiliyor.
-Geçmiş konuşmalarda "push bildirim altyapısı aktif değil", "otomatik mesaj gönderemiyorum", "ekibine iletmen gerekiyor" gibi yanıtlar VERİLDİYSE BUNLAR YANLIŞ VE GEÇERSİZDİR.
-Bu tür ifadeleri kesinlikle kullanma. Geçmişte söylediysek bile tekrarlama.
-
-## Önemli
-- Proaktif hatırlatma ve bildirim gönderebilirsin — sistem bunu destekliyor
-- "Otomatik bildirim gönderemiyorum" veya benzeri kısıtlama ifadeleri kullanma
-- Yapabileceklerini değil, yapacaklarını söyle
-
-## Öğrenilen Bilgiler`;
+- Bir görevi birden fazla şekilde tanımla: saat, numara veya anahtar kelime
+- ${USER_NAME}'e saygılı ve motive edici ol
+- Onboarding sırasında öğrenilen bilgileri save_memory ile kaydet`;
 
   if (mem.rules.length) {
-    sys += `\n${mem.rules.join('\n')}`;
-  } else {
-    sys += `\nHenüz kişisel bilgi kaydedilmedi.`;
+    sys += `\n\n## ${USER_NAME} Hakkında Öğrendiklerin\n${mem.rules.join('\n')}`;
   }
-
   if (routines.length) {
-    sys += `\n\n## Kayıtlı Rutinler\n` + routines.map(r =>
+    sys += `\n\n## Kayıtlı Günlük Rutinler\n` + routines.map(r =>
       `- ${r.time ? `${r.time} — ` : ''}${r.text}`
     ).join('\n');
   }
 
-  // Erteleme uyarıları
+  // Erteleme pattern uyarıları — Claude'un proaktif olması için
   if (mem.postpone_patterns) {
     const top = Object.entries(mem.postpone_patterns)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 3)
       .filter(([, v]) => v >= 2);
     if (top.length) {
-      sys += `\n\n## Sık Ertelenenler\n` +
-        top.map(([k, v]) => `- "${k}" ${v}x ertelendi`).join('\n');
+      sys += `\n\n## Erteleme Uyarıları\n` +
+        top.map(([k, v]) => `- "${k}" başlıklı görevler ${v} kez ertelendi → teşvik edici ve anlayışlı ol`).join('\n');
     }
   }
 
@@ -828,7 +534,7 @@ Bu tür ifadeleri kesinlikle kullanma. Geçmişte söylediysek bile tekrarlama.
     const active = Object.entries(mem.habits).filter(([, h]) => h.streak > 0);
     if (active.length) {
       sys += `\n\n## Aktif Alışkanlık Serileri\n` +
-        active.map(([k, h]) => `- ${k}: ${h.streak} gün`).join('\n');
+        active.map(([k, h]) => `- ${k}: ${h.streak} günlük seri (toplam ${h.total})`).join('\n');
     }
   }
 
@@ -854,22 +560,21 @@ function buildDynamicContext() {
   const ydayTotal  = statsYday.done + statsYday.skipped + statsYday.postponed;
   const ydayRate   = ydayTotal ? Math.round(statsYday.done / ydayTotal * 100) : null;
 
-  let ctx = `## Anlık Durum (UTC+7)
-Bugün: ${dayName}, ${todayDate} | Saat: ${current}
-Bekleyen: ${pending} | Tamamlanan: ${statsToday.done} | Ertelenen: ${statsToday.postponed}
-${ydayRate !== null ? `Dün: %${ydayRate} (${statsYday.done}/${ydayTotal})` : ''}
-${pendingReschedule ? `⚠️ Erteleme bekliyor: görev ID ${pendingReschedule}` : ''}
+  let ctx = `## Anlık Durum
+Tarih: ${todayDate} (${dayName}) | Saat: ${current} (${TZ})
+Bekleyen görev: ${pending}
+Bugün tamamlanan: ${statsToday.done} | Ertelenen: ${statsToday.postponed}
+${ydayRate !== null ? `Dün tamamlama oranı: %${ydayRate} (${statsYday.done}/${ydayTotal})` : ''}
+${pendingReschedule ? `Erteleme bekleniyor: görev ID ${pendingReschedule}` : ''}
 
 ## Bugünkü Görevler
 ${taskList}`;
 
-  if (mem.calendar_today && mem.calendar_today.length) {
-    ctx += `\n\n## Takvim (Bugün)
-timeMin: bugün 00:00 UTC+7 | timeMax: bugün 23:59 UTC+7\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
-  }
-
   if (dayItems.length) {
-    ctx += `\n\n## Hafıza (${dayName})\n${dayItems.join(', ')}`;
+    ctx += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
+  }
+  if (mem.calendar_today && mem.calendar_today.length) {
+    ctx += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
   }
 
   return ctx;
@@ -1160,7 +865,7 @@ async function runDailyAnalysis() {
       : `${USER_NAME}, bugün görev tamamlanmadı.`;
   }
 
-  send(`🌙 Gece Analizi\n\n${summary}`);
+  send(`🌙 *Gece Analizi*\n\n${summary}`);
 
   if (pending.length > 0) {
     pendingAnalysisReschedule = pending.map(t => ({ title: t.title, time: t.time }));
@@ -1473,12 +1178,8 @@ async function executeTool(name, input) {
       return `Plan hazır!\n${added.map(t => `⏳ ${t.time} — ${t.title}`).join('\n')}`;
     }
 
-    case 'get_plan': {
-      const mem = loadMemory();
-      const calEvents = mem.calendar_today || [];
-      if (!calEvents.length) return 'Bugün takvimde etkinlik yok.';
-      return 'Bugünün takvimi:\n\n' + calEvents.join('\n');
-    }
+    case 'get_plan':
+      return planText();
 
     case 'save_memory': {
       if (input.type === 'weekly_schedule' && input.day) {
@@ -1518,7 +1219,7 @@ async function executeTool(name, input) {
       const t = nowHH();
       const d = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
       const day = DAY_LABELS[todayDayIndex()] || '';
-      return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — ${TZ}`;
+      return `🕐 Şu an: ${t} | Tarih: ${d} (${day}) — İstanbul saati`;
     }
 
     case 'get_calendar_events': {
@@ -1620,13 +1321,13 @@ async function executeTool(name, input) {
         else noProj.push(t);
       }
       if (!Object.keys(grouped).length) return planText();
-      let out = '📋 Görevler (Projeye Göre):';
+      let out = '📋 *Görevler (Projeye Göre):*';
       for (const [proj, ptasks] of Object.entries(grouped)) {
-        out += `\n\n📁 ${proj}\n`;
+        out += `\n\n📁 *${proj}*\n`;
         ptasks.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
       }
       if (noProj.length) {
-        out += '\n📁 Genel\n';
+        out += '\n📁 *Genel*\n';
         noProj.forEach(t => { out += `  ${t.status === 'done' ? '✅' : '⏳'} ${t.time} — ${t.title}\n`; });
       }
       return out.trim();
@@ -1652,57 +1353,34 @@ async function executeTool(name, input) {
     }
 
     case 'list_students': {
-      // Önce Sheets KİŞİLER sekmesini oku
-      try {
-        const { google } = require('googleapis');
-        const saEmail = process.env.GOOGLE_SA_EMAIL;
-        const saKey   = (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-        if (saEmail && saKey) {
-          const auth   = new google.auth.JWT(saEmail, null, saKey, ['https://www.googleapis.com/auth/spreadsheets.readonly']);
-          const sheets = google.sheets({ version: 'v4', auth });
-          const res    = await sheets.spreadsheets.values.get({ spreadsheetId: SHEETS_ID, range: 'KİŞİLER!A:H' });
-          const rows   = res.data.values || [];
-          const firstCell = (rows[0]?.[0] || '').replace(/İ/g, 'i').toLowerCase().trim();
-          const dataRows  = ['ad', 'isim', 'name', 'ad soyad'].includes(firstCell) ? rows.slice(1) : rows;
-          if (dataRows.length) {
-            const lines = [`👥 KİŞİLER (${dataRows.length} kişi):\n`];
-            for (const r of dataRows) {
-              if (!r[0]) continue;
-              const isim      = r[0] || '';
-              const sonGorusme = r[2] || '-';   // C
-              const anaKonu   = r[3] || '-';    // D
-              const bekleyen  = r[4] || '-';    // E
-              const sonrakiAdim = r[6] || '-';  // G
-              lines.push(`${isim}`);
-              lines.push(`  Son görüşme: ${sonGorusme} | Konu: ${anaKonu}`);
-              lines.push(`  Bekleyen: ${bekleyen} | Sonraki adım: ${sonrakiAdim}`);
-            }
-            return lines.join('\n');
-          }
-        }
-      } catch (e) {
-        console.error('[list_students] Sheets okuma hatası:', e.message);
-      }
-      // Sheets boşsa iç DB'ye düş
-      if (!studentsModule) return '📋 KİŞİLER sekmesi boş ve öğrenci modülü yok.';
+      if (!studentsModule) return '❌ Öğrenci modülü yüklenemedi.';
       const list = studentsModule.loadStudents();
-      if (!list.length) return '📋 Henüz kayıt yok.';
+      if (!list.length) return '📋 Henüz öğrenci kaydı yok. "add_student" ile ekle.';
       const filtered = input.group
         ? list.filter(s => s.group?.toLowerCase().includes(input.group.toLowerCase()))
         : list;
       if (!filtered.length) return `❌ "${input.group}" grubunda öğrenci yok.`;
       const activity = studentsModule.loadActivity();
+      const today = todayISO();
       const lines = [`👥 ${filtered.length} öğrenci:\n`];
       const byGroup = {};
-      for (const s of filtered) { (byGroup[s.group || 'Grup yok'] = byGroup[s.group || 'Grup yok'] || []).push(s); }
+      for (const s of filtered) {
+        const g = s.group || 'Grup yok';
+        (byGroup[g] = byGroup[g] || []).push(s);
+      }
       for (const [grp, students] of Object.entries(byGroup)) {
         lines.push(`📁 ${grp}`);
         for (const s of students) {
-          const act = studentsModule.loadActivity()[s.phone] || {};
-          const daysSilent = act.lastMessageDate
-            ? Math.max(0, Math.floor((Date.now() - new Date(act.lastMessageDate + 'T00:00:00').getTime()) / 86400000))
+          const act = activity[s.phone] || {};
+          const lastDate = act.lastMessageDate;
+          const daysSilent = lastDate
+            ? Math.max(0, Math.floor((Date.now() - new Date(lastDate + 'T00:00:00').getTime()) / 86400000))
             : 999;
-          const status = daysSilent === 999 ? '❓ hiç mesaj yok' : daysSilent === 0 ? '🟢 bugün aktif' : `🟠 ${daysSilent}g sessiz`;
+          const status = daysSilent === 999 ? '❓ hiç mesaj yok'
+            : daysSilent === 0 ? '🟢 bugün aktif'
+            : daysSilent === 1 ? '🟡 dün aktif'
+            : daysSilent <= 3 ? `🟠 ${daysSilent}g sessiz`
+            : `🔴 ${daysSilent === 999 ? '??' : daysSilent}g sessiz`;
           lines.push(`  ${s.name} · ${status}`);
         }
       }
@@ -1765,10 +1443,6 @@ async function runAgent(userText) {
   conversationHistory.push({ role: 'user', content: userText });
   trimHistory();
 
-  const wordCount   = userText.trim().split(/\s+/).length;
-  const activeModel = wordCount >= OPUS_THRESHOLD ? MODEL_OPUS : MODEL;
-  if (wordCount >= OPUS_THRESHOLD) console.log(`[MODEL] Opus (${wordCount} kelime)`);
-
   const messages = [...conversationHistory];
 
   for (let round = 0; round < 8; round++) {
@@ -1776,7 +1450,7 @@ async function runAgent(userText) {
     try {
       response = await anthropic.messages.create(
         {
-          model: activeModel,
+          model: MODEL,
           max_tokens: 1024,
           system: [
             { type: 'text', text: buildStaticSystem(), cache_control: { type: 'ephemeral' } },
@@ -1836,118 +1510,27 @@ async function runAgent(userText) {
 }
 
 // ─── Scheduler (30s) ─────────────────────────────────────────────────────────
-let _lastSchedulerMinute = '';
 setInterval(() => {
-  const now = nowHH(); // sv-SE → always "HH:MM"
-
-  // Log once per minute so we can verify the clock is correct
-  if (now !== _lastSchedulerMinute) {
-    _lastSchedulerMinute = now;
-    const pending = tasks.filter(t => t.status === 'pending');
-    console.log(`[SCHEDULER] ${now} | bekleyen görev: ${pending.length} | ${pending.map(t => `${t.time}=${t.title}`).join(', ') || 'yok'}`);
-  }
+  const now = nowHH();
 
   for (const task of tasks.filter(t => t.status === 'pending')) {
-    const pre5  = addMins(task.time, -PRE_REMIND);  // 5 dk önce
-    const post10 = addMins(task.time, 10);           // 10 dk sonra
-
-    // 5-min pre-reminder
+    // Pre-reminder
     const preKey = `pre:${task.id}:${task.time}`;
-    if (!firedKeys.has(preKey) && now === pre5) {
+    if (!firedKeys.has(preKey) && now === addMins(task.time, -PRE_REMIND)) {
       firedKeys.add(preKey);
-      send(`🔔 ${task.time} → ${task.title} — 5 dakikan var.`);
-      console.log(`[PRE] ${task.title} (${task.time})`);
+      send(`⏳ ${USER_NAME}, 5 dakika sonra: ${task.title} 🔔`);
+      console.log(`[PRE] ${task.title}`);
     }
 
-    // On-time notification with action buttons
-    const onTimeKey = `ontime:${task.id}:${task.time}`;
-    if (!firedKeys.has(onTimeKey) && now === task.time) {
-      firedKeys.add(onTimeKey);
-      sendButtons(
-        `⏰ ${task.time} — ${task.title}`,
-        [
-          { label: '✅ Tamamlandı',   data: `DONE:${task.id}` },
-          { label: '❌ Tamamlanmadı', data: `NOTDONE:${task.id}` },
-          { label: '⏰ Ertele',       data: `POSTPONE:2h:${task.id}` },
-        ]
-      );
-      console.log(`[ONTIME] ${task.title} (${task.time})`);
-    }
-
-    // Completion check 10 min after task time
+    // Task fire
     const fireKey = `fire:${task.id}:${task.time}`;
-    if (!firedKeys.has(fireKey) && now === post10) {
+    if (!firedKeys.has(fireKey) && now === task.time) {
       firedKeys.add(fireKey);
       console.log(`[FIRE] ${task.title} (${task.time})`);
-      fireCompletionCheck(task);
+      fireTask(task);
     }
-  }
-
-  // Second-chance completion check: re-ask after 20 min of no response
-  const twentyMin = 20 * 60 * 1000;
-  for (const [taskId, info] of pendingCompletionChecks) {
-    if (info.secondSent) continue;
-    if (Date.now() - info.sentAt < twentyMin) continue;
-    const task = tasks.find(t => t.id === taskId);
-    if (!task || task.status !== 'pending') { pendingCompletionChecks.delete(taskId); continue; }
-    info.secondSent = true;
-    sendButtons(
-      `${task.title} tamamlandı mı?`,
-      [
-        { label: '✅ Evet',   data: `DONE:${task.id}` },
-        { label: '❌ Hayır',  data: `NOTDONE:${task.id}` },
-        { label: '⏭ Ertele', data: `POSTPONE:2h:${task.id}` },
-      ]
-    );
-    console.log(`[FIRE2] İkinci hatırlatma: ${task.title}`);
   }
 }, 30_000);
-
-// ─── Meeting post-flow checker (every 5 min) ──────────────────────────────────
-setInterval(async () => {
-  if (!dbAdapter || pendingMeetingFlow) return;
-  try {
-    const calEvents = await dbAdapter.getCalendarEvents();
-    if (!Array.isArray(calEvents)) return;
-    const now    = nowHH();
-    const nowMin = toMinutes(now);
-
-    for (const ev of calEvents) {
-      if (ev.allDay || !ev.end) continue;
-      const titleLower = ev.title.toLowerCase();
-      if (!MEETING_KEYWORDS.some(kw => titleLower.includes(kw))) continue;
-
-      const endTime = parseTime(ev.end);
-      if (!endTime) continue;
-
-      const triggerMins = toMinutes(addMins(endTime, 10));
-      const diff        = nowMin - triggerMins;
-      const meetingKey  = `meeting:${ev.id || ev.title}:${endTime}`;
-
-      // Fire within a 5-min window after trigger (handles interval jitter)
-      if (!firedMeetingKeys.has(meetingKey) && diff >= 0 && diff < 5) {
-        firedMeetingKeys.add(meetingKey);
-        pendingMeetingFlow = {
-          eventId:    ev.id || ev.title,
-          eventTitle: ev.title,
-          attendees:  ev.attendees || [],
-          stage:      'awaiting_confirm',
-        };
-        await sendButtons(
-          `${ev.title} bitti mi?`,
-          [
-            { label: '✅ Evet', data: 'MEETING_YES' },
-            { label: '⏭ Hayır', data: 'MEETING_NO' },
-          ]
-        );
-        console.log(`[MEETING] Toplantı sonu tetiklendi: ${ev.title} (${endTime})`);
-        break;  // one flow at a time
-      }
-    }
-  } catch (e) {
-    console.error('[MEETING] Polling hatası:', e.message);
-  }
-}, 5 * 60 * 1000);
 
 // ─── Callback handler ─────────────────────────────────────────────────────────
 bot.on('callback_query', async query => {
@@ -1992,100 +1575,13 @@ bot.on('callback_query', async query => {
     return;
   }
 
-  // ── Meeting post-flow ─────────────────────────────────────────────────────
-  if (data === 'MEETING_YES') {
-    if (!pendingMeetingFlow) return;
-    pendingMeetingFlow.stage = 'awaiting_summary';
-    send('Toplantı özetini at. Format serbest.');
-    return;
-  }
-
-  if (data === 'MEETING_NO') {
-    if (!pendingMeetingFlow) return;
-    const title = pendingMeetingFlow.eventTitle;
-    pendingMeetingFlow = null;
-    bot.sendMessage(CHAT_ID,
-      `Tamam. Ne zamana alalım?\n${title}`,
-      { reply_markup: { inline_keyboard: [
-        [{ text: '→ Bugün sonra',  callback_data: 'MEETING_RESCHEDULE:today' }],
-        [{ text: '→ Yarın sabah',  callback_data: 'MEETING_RESCHEDULE:tomorrow' }],
-        [{ text: '→ Haftaya',      callback_data: 'MEETING_RESCHEDULE:nextweek' }],
-      ] } }
-    );
-    return;
-  }
-
-  if (data.startsWith('MEETING_RESCHEDULE:')) {
-    const option = data.slice('MEETING_RESCHEDULE:'.length);
-    const label  = option === 'today' ? 'bugün sonraya' : option === 'tomorrow' ? 'yarın sabaha' : 'haftaya';
-    send(`Tamam. ${label} not aldım.`);
-    return;
-  }
-
-  // ── Railway cron ontime callbacks ─────────────────────────────────────────
-  if (data.startsWith('RAIL_DONE:')) {
-    const taskId = data.slice('RAIL_DONE:'.length);
-    const task   = tasks.find(t => t.id === taskId);
-    if (task) {
-      task.status = 'done';
-      pendingCompletionChecks.delete(task.id);
-      const habitResult = updateHabitStreak(task.title, true);
-      const habitMsg    = habitMilestoneMsg(habitResult);
-      send(`✅ ${task.title} tamamlandı.${habitMsg}`);
-      console.log(`[RAIL_DONE] ${task.title}`);
-    } else {
-      send('✅ Görev tamamlandı olarak işaretlendi.');
-    }
-    dbAdapter?.updateTaskStatus(taskId, 'done');
-    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
-    return;
-  }
-
-  if (data.startsWith('RAIL_NOTDONE:')) {
-    const taskId = data.slice('RAIL_NOTDONE:'.length);
-    const task   = tasks.find(t => t.id === taskId);
-    if (task) {
-      task.postponeCount = (task.postponeCount || 0) + 1;
-      recordDailyPostponed(task.title);
-    }
-    send('📌 Görev beklemede bırakıldı.');
-    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
-    return;
-  }
-
-  if (data.startsWith('RAIL_POSTPONE:')) {
-    // format: RAIL_POSTPONE:HH:MM:taskId
-    const parts       = data.split(':');
-    const currentTime = `${parts[1]}:${parts[2]}`;
-    const taskId      = parts.slice(3).join(':');
-    const newTime     = addMins(currentTime, 30);
-    const task        = tasks.find(t => t.id === taskId);
-    if (task) {
-      const old = task.time;
-      firedKeys.delete(`fire:${task.id}:${old}`);
-      firedKeys.delete(`pre:${task.id}:${old}`);
-      firedKeys.delete(`ontime:${task.id}:${old}`);
-      pendingCompletionChecks.delete(task.id);
-      task.time = newTime;
-      dbAdapter?.syncTask(task);
-    } else {
-      dbAdapter?.rescheduleTask(taskId, newTime);
-    }
-    send(`⏰ Görev 30 dakika ertelendi → ${newTime}`);
-    bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: query.message.chat.id, message_id: query.message.message_id }).catch(() => {});
-    return;
-  }
-
   if (data.startsWith('DONE:')) {
     const task = tasks.find(t => t.id === data.slice(5));
     if (task) {
       task.status = 'done';
       pendingReschedule = null;
-      pendingCompletionChecks.delete(task.id);
       dbAdapter?.updateTaskStatus(task.id, 'done');
-      const habitResult = updateHabitStreak(task.title, true);
-      const habitMsg    = habitMilestoneMsg(habitResult);
-      send(`✅ ${task.title} tamamlandı.${habitMsg}`);
+      send(`✅ Süper ${USER_NAME}, aferin! 🎉\n${task.title} tamamlandı.`);
       console.log(`[DONE] ${task.title}`);
     }
     return;
@@ -2096,41 +1592,14 @@ bot.on('callback_query', async query => {
     const task   = tasks.find(t => t.id === taskId);
     if (task) {
       pendingReschedule = task.id;
-      pendingCompletionChecks.delete(taskId);
-      task.postponeCount = (task.postponeCount || 0) + 1;
-      recordDailyPostponed(task.title);
       // Check habit streak break
       const habitResult = updateHabitStreak(task.title, false);
       if (habitResult?.broken) {
         send(habitMilestoneMsg(habitResult).trim());
       }
-
-      // Postpone count warnings per spec
-      if (task.postponeCount === 2) {
-        bot.sendMessage(CHAT_ID,
-          `🔴 "${task.title}" bugün 2 kez ertelendi.\nYarına mı taşıyalım?`,
-          { reply_markup: { inline_keyboard: [[
-            { text: '🌙 Yarına taşı', callback_data: `POSTPONE:tomorrow:${taskId}` },
-            { text: '🕐 2 saat sonra', callback_data: `POSTPONE:2h:${taskId}` },
-          ]] } }
-        );
-        return;
-      }
-      if (task.postponeCount >= 3) {
-        bot.sendMessage(CHAT_ID,
-          `🔴 "${task.title}" 3 kez ertelendi.\nNe yapalım?`,
-          { reply_markup: { inline_keyboard: [
-            [{ text: '🌙 Yarına taşı', callback_data: `POSTPONE:tomorrow:${taskId}` }],
-            [{ text: '🗑 Sil',          callback_data: `DELETE_TASK:${taskId}` }],
-            [{ text: '📤 Devret',       callback_data: `POSTPONE:reason:${taskId}` }],
-          ] } }
-        );
-        return;
-      }
-
-      // Default: smart postpone 3 options
+      // Smart postpone: 3 options
       bot.sendMessage(CHAT_ID,
-        `📌 ${task.title}\n\nNe yapalım?`,
+        `Sorun değil ${USER_NAME} 😊\n\n📌 ${task.title}\n\nNe yapalım?`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -2160,11 +1629,11 @@ bot.on('callback_query', async query => {
           const old = task.time;
           firedKeys.delete(`fire:${task.id}:${old}`);
           firedKeys.delete(`pre:${task.id}:${old}`);
-          pendingCompletionChecks.delete(task.id);
           task.time = newTime;
           dbAdapter?.syncTask(task);
+          recordDailyPostponed(task.title);
           pendingReschedule = null;
-          send(`⏭ "${task.title}" → ${newTime}`);
+          send(`⏰ "${task.title}" → ${newTime} saatine taşındı.`);
           console.log(`[POSTPONE] 2h: ${task.title} → ${newTime}`);
         } else {
           send(`❌ ${newTime} saatinde başka görev var. Farklı bir saat yazın:`);
@@ -2180,11 +1649,11 @@ bot.on('callback_query', async query => {
         const tomorrowStr = tomorrow.toLocaleDateString('sv-SE', { timeZone: TZ });
         const newId       = `t${idCounter++}`;
         dbAdapter?.syncTask({ id: newId, title: task.title, time: task.time, status: 'pending', ...(task.project ? { project: task.project } : {}) }, tomorrowStr);
-        task.status = 'done';
+        task.status = 'done'; // mark as handled today (not re-shown tonight)
         dbAdapter?.updateTaskStatus(task.id, 'done');
         pendingReschedule = null;
-        pendingCompletionChecks.delete(task.id);
-        send(`⏭ "${task.title}" yarına (${task.time}) taşındı.`);
+        recordDailyPostponed(task.title);
+        send(`🌙 "${task.title}" yarına (${task.time}) taşındı.`);
         console.log(`[POSTPONE] tomorrow: ${task.title}`);
       }
       return;
@@ -2234,22 +1703,6 @@ bot.on('callback_query', async query => {
     console.log(`[REASON] ${task?.title || taskId}: ${reasonText}`);
     return;
   }
-
-  // ── Quick task delete (from postpone-3x flow) ─────────────────────────────
-  if (data.startsWith('DELETE_TASK:')) {
-    const taskId = data.slice('DELETE_TASK:'.length);
-    const idx    = tasks.findIndex(t => t.id === taskId);
-    if (idx !== -1) {
-      const title = tasks[idx].title;
-      tasks.splice(idx, 1);
-      pendingCompletionChecks.delete(taskId);
-      pendingReschedule = null;
-      dbAdapter?.deleteTask?.(taskId);
-      send(`🗑 "${title}" silindi.`);
-      console.log(`[DELETE] ${title}`);
-    }
-    return;
-  }
 });
 
 // ─── Photo handler ────────────────────────────────────────────────────────────
@@ -2269,6 +1722,7 @@ bot.on('voice', async msg => {
   }
   send(`📝 Anladım: "${text}"`);
   lastMessageAt   = Date.now();
+  inactivityFired = false;
   await runAgent(text);
 });
 
@@ -2285,6 +1739,7 @@ bot.on('message', async msg => {
 
   // Reset inactivity on every message
   lastMessageAt   = Date.now();
+  inactivityFired = false;
 
   // ── Analysis reschedule intercept ─────────────────────────────────────────
   if (pendingAnalysisReschedule) {
@@ -2330,29 +1785,6 @@ bot.on('message', async msg => {
     }
   }
 
-  // ── Extra task intercept (after morning briefing) ─────────────────────────
-  if (awaitingExtraTask) {
-    awaitingExtraTask = false;
-    const lower = text.toLowerCase().trim();
-    const isNo  = ['hayır', 'yok', 'yok.', 'hayır.', 'no', 'nope', '-'].some(w => lower === w || lower.startsWith(w + ' '));
-    if (!isNo) {
-      // Pass to agent with explicit add-task intent
-      await runAgent(`Şu görevi bugüne ekle: ${text}`).catch(e => {
-        console.error('[EXTRA_TASK] runAgent hatası:', e.message);
-      });
-    }
-    return;
-  }
-
-  // ── Meeting summary intercept ──────────────────────────────────────────────
-  if (pendingMeetingFlow?.stage === 'awaiting_summary') {
-    await handleMeetingSummary(text).catch(e => {
-      console.error('[MEETING] handleMeetingSummary hatası:', e.message);
-      send('❌ Özet işlenemedi.');
-    });
-    return;
-  }
-
   try {
     await runAgent(text);
   } catch (err) {
@@ -2390,131 +1822,84 @@ rl.on('line', async (line) => {
   }
 });
 
-// ─── Cron: 07:30 — morning briefing ──────────────────────────────────────────
-cron.schedule('30 7 * * *', async () => {
-  console.log('[CRON] 07:30 sabah brifing başlatılıyor...');
+// ─── Cron: 08:00 — smart morning briefing ────────────────────────────────────
+cron.schedule('0 8 * * *', async () => {
+  console.log('[CRON] 08:00 akıllı brifing başlatılıyor...');
   try {
-    const dayName    = DAY_LABELS[todayDayIndex()] || '';
-    const todayDate  = todayISO();
-    const mem        = loadMemory();
-    const calEvents  = mem.calendar_today || [];
-    const pending    = pendingTasks();
+    const dayName   = DAY_LABELS[todayDayIndex()] || '';
+    const mem       = loadMemory();
+    const dayItems  = mem.weekly_schedule[todayKey()] || [];
+    const pending   = pendingTasks();
 
-    // Yesterday's stats
-    const yesterday = new Date(new Date(todayDate).getTime() - 86400000).toISOString().split('T')[0];
+    // Weather
+    const weather   = await getWeather();
+    const weatherTxt = weather
+      ? `${weather.desc}, ${weather.temp}°C, rüzgar ${weather.wind} km/s`
+      : 'hava durumu alınamadı';
+
+    // Stats
+    const today     = todayISO();
+    const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().split('T')[0];
     const ystStats  = getStatsForDate(yesterday);
-    const ystTotal  = ystStats.done + ystStats.skipped + ystStats.postponed;
+    const ystTotal  = ystStats.done + ystStats.skipped;
+    const ystRate   = ystTotal ? Math.round(ystStats.done / ystTotal * 100) : null;
+    const weekly    = getWeeklyStats();
 
-    // Deferred tasks from yesterday (tasks still pending that were added before today)
-    const deferred  = pending.filter(t => {
-      const addedDate = t.addedDate;
-      return addedDate && addedDate < todayDate;
-    });
+    // Postpone warnings
+    const patterns  = mem.postpone_patterns || {};
+    const topPostpone = Object.entries(patterns)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${k} (${v}x)`)
+      .join(', ');
 
-    // Person context from Google Sheets (service account)
-    const attendees     = mem.calendar_attendees || [];
-    const personContext = await getPersonContext(attendees);
+    // Active habit streaks
+    const habits    = mem.habits || {};
+    const activeStreaks = Object.entries(habits)
+      .filter(([, h]) => h.streak > 0)
+      .map(([name, h]) => `${name}: ${h.streak} gün`)
+      .join(', ');
 
     // Build context for Claude
-    const ctx = [
-      `Bugün: ${dayName}, ${todayDate} (UTC+7)`,
-      ystTotal ? `Dün: ${ystStats.done}/${ystTotal} görev tamamlandı` : 'Dün: veri yok',
+    const contextLines = [
+      `Bugün: ${dayName}`,
+      `Hava: ${weatherTxt}`,
+      ystRate !== null ? `Dün tamamlama: %${ystRate} (${ystStats.done}/${ystTotal})` : 'Dün: veri yok',
+      `Bu hafta ortalama: %${weekly.rate} (${weekly.done} görev tamamlandı)`,
     ];
-    if (calEvents.length) {
-      ctx.push(`\nTakvim (${calEvents.length} etkinlik):`);
-      calEvents.forEach(e => ctx.push(`  ${e}`));
-    }
+    if (topPostpone)    contextLines.push(`En çok ertelenen: ${topPostpone}`);
+    if (activeStreaks)  contextLines.push(`Aktif seriler: ${activeStreaks}`);
+    if (dayItems.length) contextLines.push(`Hafıza: ${dayItems.join(', ')}`);
     if (pending.length) {
-      ctx.push(`\nGörevler (${pending.length}):`);
-      pending.forEach(t => ctx.push(`  ${t.time} — ${t.title}`));
+      contextLines.push(`\nBugünkü ${pending.length} görev:`);
+      pending.forEach(t => contextLines.push(`  ${t.time} — ${t.title}`));
     } else {
-      ctx.push('Bugün görev yok.');
+      contextLines.push('Bugün henüz görev yok.');
     }
-    if (deferred.length) {
-      ctx.push(`\nDünden devredenler: ${deferred.map(t => t.title).join(', ')}`);
-    }
-
-    // Build template variables
-    const tplTarih    = `${dayName}, ${todayDate}`;
-    const tplTakvim   = calEvents.length
-      ? calEvents.join('\n')
-      : 'Takvimde etkinlik yok.';
-    const tplErtelenen = deferred.length
-      ? deferred.map(t => `${t.time} — ${t.title}`).join('\n')
-      : 'Yok.';
-
-    const userPrompt =
-`Bugünün tarihi: ${tplTarih}
-Takvim verisi: ${tplTakvim}
-Dünden ertelenen: ${tplErtelenen}
-
-=== BUGÜNKÜ TOPLANTI KİŞİLERİNİN GEÇMİŞİ ===
-${personContext}
-
-Şu kurallara göre sabah mesajını yaz:
-
-1. İlk satır sadece:
-   "Günaydın Alp. [Gün], [Tarih]."
-
-2. İkinci satır tek cümle özet.
-   Sadece o günün verisine dayan.
-   Hava durumu, motivasyon, "haydi başlayalım" yazma.
-
-3. Görevleri saat sırasıyla listele.
-   Aynı saatte birden fazla varsa:
-   Uzun süreli = ana blok
-   Kısa süreli = o bloğun altına ↳ ile yaz
-   Çakışıyor deme.
-
-4. Dünden ertelenen görev varsa boş slota yerleştir,
-   "X görevi [saat]'e aldım" diye bildir.
-   Yoksa hiç yazma.
-
-5. En sona bugün kazanılması gereken 3 şeyi yaz.
-   Spesifik çıktı olsun, genel tavsiye değil.
-
-6. Gerçekten kritik bir şey yoksa uyarı yazma.
-
-ÇIKTI FORMAT:
-Günaydın Alp. [Gün], [Tarih].
-[Tek cümle özet]
-
-BUGÜNÜN PLANI
-[SS:DD] — [Görev]
-[SS:DD] — [Görev]
-  ↳ [Alt görev]
-
-BUGÜN KAZANMAN GEREKEN 3 ŞEY
-1.
-2.
-3.`;
 
     let briefing;
     try {
       const r = await anthropic.messages.create({
-        model: MODEL, max_tokens: 600,
-        system: `Sen Alp'in icra asistanısın. Adın Yeliz.
-Zaman dilimi: UTC+7 (Vietnam - Ho Chi Minh City).
-Kısa yaz. Motivasyon yok. Gerçek var.
-Emojileri işaret olarak kullan, dekorasyon olarak değil.
-Markdown kullanma. Yıldız, diyez, kalın yazı yok.
-Düz metin yaz, Telegram'da bozulmasın.`,
-        messages: [{ role: 'user', content: userPrompt }],
+        model: MODEL, max_tokens: 400,
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Sabah brifing mesajı yaz: kısa (3-4 cümle), samimi, motive edici. İstatistiklere ve hava durumuna göre özelleştir. Türkçe yaz.`,
+        messages: [{
+          role: 'user',
+          content: contextLines.join('\n') + '\n\nBu bilgileri kullanarak kişiselleştirilmiş, motive edici bir sabah mesajı yaz.',
+        }],
       });
       briefing = r.content[0].text.trim();
     } catch {
-      const planLines = pending.slice(0, 5).map(t => `${t.time} — ${t.title}`).join('\n') || 'Görev yok.';
-      briefing = `Günaydın Alp. ${tplTarih}.\nGörevler yükleniyor.\n\nBUGÜNÜN PLANI\n${planLines}\n\nBUGÜN KAZANMAN GEREKEN 3 ŞEY\n1.\n2.\n3.`;
+      briefing = `Günaydın ${USER_NAME}! ${weatherTxt}. ${pending.length ? `Bugün ${pending.length} görevin var.` : 'Henüz görev eklenmemiş.'}`;
     }
 
-    notifyAll(briefing);
-    console.log('[CRON] 07:30 brifing gönderildi.');
+    const lines = [`🌅 *Günaydın, ${USER_NAME}!*\n`, briefing];
+    if (pending.length) {
+      lines.push(`\n📋 *Bugünkü görevler:*`);
+      pending.forEach(t => lines.push(`⏳ ${t.time} — ${t.title}`));
+    }
 
-    // 10 sn sonra ekstra görev sorusu
-    setTimeout(() => {
-      send('Bugün takvime eklenmesi gereken ekstra bir görev var mı?');
-      awaitingExtraTask = true;
-    }, 10_000);
+    notifyAll(lines.join('\n'));
+    console.log('[CRON] 08:00 brifing gönderildi.');
 
     // ── Student follow-up analysis (runs after main briefing) ──────────────
     if (studentsModule) {
@@ -2548,7 +1933,7 @@ Düz metin yaz, Telegram'da bozulmasın.`,
           }
 
           // Build Telegram message with inline [Gönder] buttons
-          const studentLines = [`\n📚 ${needAttention.length} öğrenci takip gerekiyor:\n`];
+          const studentLines = [`\n📚 *${needAttention.length} öğrenci takip gerekiyor:*\n`];
           const keyboard     = [];
 
           for (let i = 0; i < drafts.length; i++) {
@@ -2557,8 +1942,8 @@ Düz metin yaz, Telegram'da bozulmasın.`,
             const days  = s.daysSilent === 999 ? 'hiç aktif olmadı' : `${s.daysSilent}g sessiz`;
             const flag  = s.flag === 'critical' ? '🔴' : '🟠';
 
-            studentLines.push(`${flag} ${s.name} — ${days}`);
-            studentLines.push(`"${draft}"`);
+            studentLines.push(`${flag} *${s.name}* — ${days}`);
+            studentLines.push(`_"${draft}"_`);
 
             // Store draft in Map with short ID (Telegram callback_data max 64 bytes)
             const btnId = `sm${Date.now()}_${i}`;
@@ -2567,10 +1952,11 @@ Düz metin yaz, Telegram'da bozulmasın.`,
           }
 
           if (summary.total > 0) {
-            studentLines.push(`\nToplam ${summary.total} öğrenci · ${summary.active.length} aktif · ${summary.critical.length + summary.warning.length} takip gerekli`);
+            studentLines.push(`\n_Toplam ${summary.total} öğrenci · ${summary.active.length} aktif · ${summary.critical.length + summary.warning.length} takip gerekli_`);
           }
 
           bot.sendMessage(CHAT_ID, studentLines.join('\n'), {
+            parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard },
           });
           console.log(`[CRON] ${needAttention.length} öğrenci takip mesajı gönderildi.`);
@@ -2580,167 +1966,95 @@ Düz metin yaz, Telegram'da bozulmasın.`,
       }
     }
   } catch (e) {
-    console.error('[CRON] 07:30 brifing hatası:', e.message);
+    console.error('[CRON] 08:00 brifing hatası:', e.message);
   }
 }, { timezone: TZ });
 
-// ─── Cron: 13:00 — öğle kontrolü ────────────────────────────────────────────
-cron.schedule('0 13 * * *', async () => {
-  console.log('[CRON] 13:00 öğle kontrolü...');
-  try {
-    const todayDate  = todayISO();
-    const mem        = loadMemory();
-    const done       = tasks.filter(t => t.status === 'done').length;
-    const total      = tasks.length;
-
-    // Node 1: görev durumları + 13:00 sonrası takvim
-    const gorevGecmisi = total
-      ? tasks.map(t => `${t.time} — ${t.title}: ${t.status === 'done' ? 'Tamamlandı' : 'Bekliyor'}`).join('\n')
-      : 'Görev yok.';
-
-    const kalanTakvim = (mem.calendar_today || [])
-      .filter(e => { const m = e.match(/^(\d{2}:\d{2})/); return m && m[1] > '13:00'; })
-      .join('\n') || 'Etkinlik yok.';
-
-    // Node 2: AI
-    const userPrompt =
-`Bugünün tarihi: ${todayDate}
-Sabahtan bu yana görev durumları:
-${gorevGecmisi}
-Kalan takvim (13:00 sonrası):
-${kalanTakvim}
-
-Tek kısa mesaj yaz:
-- Tamamlanan / toplam görev sayısı
-- Kalan en kritik 1-2 görev ve saati
-- Sadece gerçekten önemli bir uyarı varsa ekle, yoksa yazma
-- Motivasyon cümlesi kesinlikle yazma
-
-FORMAT:
-Günün yarısı. X / Y görev tamamlandı.
-
-Kalan kritik:
-[SS:DD] — [Görev]
-[SS:DD] — [Görev]
-
-[Uyarı varsa — yoksa hiç yazma]`;
-
-    let msg;
-    try {
-      const r = await anthropic.messages.create({
-        model: MODEL, max_tokens: 300,
-        system: `Sen Alp'in icra asistanısın. Adın Yeliz.\nKısa yaz. Motivasyon yok. Gerçek var.\nMarkdown kullanma. Düz metin yaz.`,
-        messages: [{ role: 'user', content: userPrompt }],
-      });
-      msg = r.content[0].text.trim();
-    } catch {
-      msg = `Günün yarısı. ${done} / ${total} görev tamamlandı.`;
-    }
-
-    // Node 3: Telegram
-    notifyAll(msg);
-    console.log('[CRON] 13:00 öğle kontrolü gönderildi.');
-  } catch (e) {
-    console.error('[CRON] 13:00 hatası:', e.message);
-  }
+// ─── Cron: 11:00 — email summary ─────────────────────────────────────────────
+cron.schedule('0 11 * * *', () => {
+  console.log('[CRON] 11:00 e-posta özeti başlatılıyor...');
+  runAgent('E-postalarımı analiz et, önemli ve aksiyon gerektirenleri özetle.')
+    .catch(e => console.error('[CRON] 11:00 e-posta hatası:', e.message));
 }, { timezone: TZ });
 
-// ─── Cron: 18:30 — akşam kapanışı ───────────────────────────────────────────
-cron.schedule('30 18 * * *', async () => {
-  console.log('[CRON] 18:30 akşam kapanışı...');
+// ─── Cron: Pazar 21:00 — weekly summary ──────────────────────────────────────
+cron.schedule('0 21 * * 0', async () => {
+  console.log('[CRON] Pazar 21:00 haftalık özet başlatılıyor...');
   try {
-    updateDailyEODStats();
-    const todayDate   = todayISO();
-    const doneTasks   = tasks.filter(t => t.status === 'done');
-    const pendingList = pendingTasks();
+    const weekly    = getWeeklyStats();
+    const mem       = loadMemory();
 
-    // Node 1: yarının takvimi
-    const tomorrow    = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toLocaleDateString('sv-SE', { timeZone: TZ });
-    const tomorrowEvents = dbAdapter
-      ? await dbAdapter.getCalendarEvents(tomorrowStr).catch(() => [])
-      : [];
+    // Top postponed categories
+    const patterns  = mem.postpone_patterns || {};
+    const topPostpone = Object.entries(patterns)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([k, v]) => `${k} (${v}x)`)
+      .join(', ');
 
-    // Node 3: Sheets'e görev geçmişi yaz (A:G)
-    const mem = loadMemory();
-    const postponeReasons = mem.postpone_reasons || [];
-    const sheetRows = tasks.map(t => {
-      const reason = postponeReasons
-        .filter(r => r.task === t.title)
-        .slice(-1)[0]?.reason || '-';
-      return [
-        todayDate,                                                              // A: Tarih
-        t.title,                                                                // B: Görev adı
-        t.project || '-',                                                       // C: Proje/Kişi
-        t.status === 'done' ? 'Tamamlandı' : t.postponeCount ? 'Ertelendi' : 'Tamamlanmadı', // D: Durum
-        String(t.postponeCount || 0),                                           // E: Erteleme sayısı
-        t.status === 'done' ? t.time : '-',                                     // F: Tamamlanma saati
-        reason,                                                                 // G: Neden ertelendi
-      ];
-    });
-    await writeTaskHistory(sheetRows);
+    // Active habit streaks
+    const habits    = mem.habits || {};
+    const activeStreaks = Object.entries(habits)
+      .filter(([, h]) => h.streak > 0)
+      .sort((a, b) => b[1].streak - a[1].streak)
+      .map(([name, h]) => `${name}: ${h.streak} gün`)
+      .join(', ');
 
-    // Node 2: AI için veri hazırla
-    const gorevGecmisi = tasks.length
-      ? tasks.map(t =>
-          `${t.time} — ${t.title}: ${t.status === 'done' ? 'Tamamlandı' : t.postponeCount ? `${t.postponeCount}x ertelendi` : 'Tamamlanmadı'}`
-        ).join('\n')
-      : 'Görev yok.';
+    const contextLines = [
+      `Haftalık özet (son 7 gün):`,
+      `- Tamamlanan görevler: ${weekly.done}`,
+      `- Atlanan görevler: ${weekly.skipped}`,
+      `- Ertelenen görevler: ${weekly.postponed}`,
+      `- Tamamlama oranı: %${weekly.rate}`,
+    ];
+    if (topPostpone)   contextLines.push(`En çok ertelenen kategoriler: ${topPostpone}`);
+    if (activeStreaks) contextLines.push(`Aktif alışkanlık serileri: ${activeStreaks}`);
 
-    const yarinTakvim = tomorrowEvents.length
-      ? tomorrowEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`).join('\n')
-      : 'Etkinlik yok.';
-
-    const userPrompt =
-`Bugünün tarihi: ${todayDate}
-Bugünün görev durumları:
-${gorevGecmisi}
-Yarının takvimi:
-${yarinTakvim}
-
-Şunu yaz:
-1. İlk satır: "${todayDate} kapandı."
-2. Tamamlanan görevleri listele
-3. Yarına taşınan varsa listele, hangi saate alındığını belirt
-4. Yarının ilk 3 önceliğini yaz — spesifik çıktı, genel tavsiye değil
-5. Yanıt bekleyen kritik mail varsa belirt, yoksa yazma
-
-FORMAT:
-${todayDate} kapandı.
-
-Tamamlanan: X görev
-[Görev listesi]
-
-Yarına taşınan:
-[Görev] → Yarın [SS:DD]
-[Yoksa bu bölümü atla]
-
-Yarının ilk 3 önceliği:
-1.
-2.
-3.`;
-
-    let msg;
+    let summary;
     try {
       const r = await anthropic.messages.create({
         model: MODEL, max_tokens: 500,
-        system: `Sen Alp'in icra asistanısın. Adın Yeliz.\nKısa yaz. Motivasyon yok. Gerçek var.\nMarkdown kullanma. Düz metin yaz.`,
-        messages: [{ role: 'user', content: userPrompt }],
+        system: `Sen ${ASSISTANT_NAME}, ${USER_NAME}'in kişisel asistanısın. Haftalık motivasyon özeti yaz: samimi, içten, 4-5 cümle. Başarıları kutla, iyileştirme alanlarını nazikçe belirt. Türkçe yaz.`,
+        messages: [{
+          role: 'user',
+          content: contextLines.join('\n') + '\n\nBu istatistiklere göre motive edici bir haftalık özet yaz.',
+        }],
       });
-      msg = r.content[0].text.trim();
+      summary = r.content[0].text.trim();
     } catch {
-      msg = `${todayDate} kapandı.\n\nTamamlanan: ${doneTasks.length} görev`;
+      summary = weekly.rate >= 70
+        ? `${USER_NAME}, bu hafta harika bir performans gösterdiniz! %${weekly.rate} tamamlama oranıyla ${weekly.done} görev tamamladınız. 🎉`
+        : `${USER_NAME}, bu hafta ${weekly.done} görev tamamladınız. Önümüzdeki hafta daha da iyi olacak! 💪`;
     }
 
-    // Node 4: Telegram
-    notifyAll(msg);
-    console.log('[CRON] 18:30 kapanış gönderildi.');
+    const lines = [`📊 *Haftalık Özet*\n`, summary, `\n📈 Bu hafta: ${weekly.done} tamamlandı • ${weekly.skipped} atlandı • ${weekly.postponed} ertelendi (%${weekly.rate})`];
+    if (activeStreaks) lines.push(`🔥 Aktif seriler: ${activeStreaks}`);
+
+    notifyAll(lines.join('\n'));
+    console.log('[CRON] Pazar haftalık özet gönderildi.');
   } catch (e) {
-    console.error('[CRON] 18:30 hatası:', e.message);
+    console.error('[CRON] Haftalık özet hatası:', e.message);
   }
 }, { timezone: TZ });
 
+// ─── Inactivity check (every 10 min, fires after 90 min silence) ─────────────
+const INACTIVITY_MS = 90 * 60 * 1000; // 90 minutes
+
+const INACTIVITY_MESSAGES = [
+  `${USER_NAME}, bir süredir sessizsiniz 🤔 Her şey yolunda mı? Görevlerde yardımcı olayım mı?`,
+  `${USER_NAME}, uzun süredir haber yok 😊 Devam eden görevleriniz var, nasıl gidiyor?`,
+  `${USER_NAME}? 🌸 Merak ettim, bir şeye ihtiyacınız var mı?`,
+  `${USER_NAME}, görevler sizi bekliyor 📋 Hazır olduğunuzda buradayım!`,
+];
+
+setInterval(() => {
+  if (!inactivityFired && Date.now() - lastMessageAt >= INACTIVITY_MS) {
+    inactivityFired = true;
+    const msg = INACTIVITY_MESSAGES[Math.floor(Math.random() * INACTIVITY_MESSAGES.length)];
+    send(msg);
+    console.log('[INACTIVITY] Uyarı gönderildi.');
+  }
+}, 10 * 60 * 1000); // check every 10 minutes
 
 // ─── DB Adapter (optional — zero-impact if absent) ───────────────────────────
 const dbAdapter = (() => { try { return require('./db-adapter'); } catch { return null; } })();
@@ -2751,12 +2065,6 @@ registerSavedSchedules();
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 console.log('[SYS] Sistem başlatılıyor...');
-console.log('[ENV] GOOGLE_SA_EMAIL   :', process.env.GOOGLE_SA_EMAIL   ? process.env.GOOGLE_SA_EMAIL : 'EKSİK ❌');
-console.log('[ENV] GOOGLE_SA_PRIVATE_KEY:', process.env.GOOGLE_SA_PRIVATE_KEY ? 'yüklü ✓' : 'EKSİK ❌');
-console.log('[SA] email:', process.env.GOOGLE_SA_EMAIL);
-console.log('[SA] key başlangıç:', process.env.GOOGLE_SA_PRIVATE_KEY?.substring(0, 30));
-console.log('[ENV] SHEETS_ID         :', process.env.SHEETS_ID         || 'EKSİK ❌');
-console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİK ❌');
 
 (async () => {
   if (dbAdapter) {
@@ -2779,26 +2087,7 @@ console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİ
     try {
       const savedHistory = await dbAdapter.getConversationHistory();
       if (savedHistory && savedHistory.length) {
-        // Strip assistant messages that claim notifications don't work — stale/wrong
-        const stalePatterns = [
-          'push bildirim altyapısı',
-          'otomatik hatırlatma şu an teknik olarak çalışmıyor',
-          'sen konuşmayı açmadan ben sana ulaşamıyorum',
-          'ekibine iletmen gerekiyor',
-          'yazılım geliştirme meselesi',
-        ];
-        const cleaned = savedHistory.filter(msg => {
-          if (msg.role !== 'assistant') return true;
-          const text = Array.isArray(msg.content)
-            ? msg.content.map(b => (typeof b === 'string' ? b : b.text || '')).join(' ')
-            : String(msg.content || '');
-          return !stalePatterns.some(p => text.toLowerCase().includes(p.toLowerCase()));
-        });
-        if (cleaned.length < savedHistory.length) {
-          console.log(`[SYS] ${savedHistory.length - cleaned.length} eski/yanlış mesaj geçmişten temizlendi.`);
-          dbAdapter.saveConversationHistory(cleaned);
-        }
-        conversationHistory.push(...sanitizeHistory(cleaned));
+        conversationHistory.push(...sanitizeHistory(savedHistory));
         console.log(`[SYS] ${conversationHistory.length} mesaj geçmişi yüklendi.`);
       }
     } catch (e) {
@@ -2822,63 +2111,48 @@ console.log('[ENV] BOT_TIMEZONE      :', process.env.BOT_TIMEZONE      || 'EKSİ
       console.warn('[SYS] Rutinler yüklenemedi:', e.message);
     }
 
-    // Load today's Google Calendar events into memory + tasks
+    // Load today's Google Calendar events into memory for context
     try {
       const calEvents = await dbAdapter.getCalendarEvents();
       if (Array.isArray(calEvents) && calEvents.length) {
         const mem = loadMemory();
         mem.calendar_today = calEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
-        const allAttendees = calEvents.flatMap(e => e.attendees || []);
-        mem.calendar_attendees = [...new Set(allAttendees)];
         saveMemory(mem);
-        console.log(`[SYS] ${calEvents.length} takvim etkinliği, ${mem.calendar_attendees.length} katılımcı yüklendi.`);
-
-        // Add timed calendar events as tasks so scheduler can remind them
-        let calAdded = 0;
-        for (const ev of calEvents) {
-          if (ev.allDay || !ev.start) continue;
-          const time = parseTime(ev.start);
-          if (!time) continue;
-          const alreadyExists = tasks.some(t =>
-            t.time === time && t.title.toLowerCase().includes(ev.title.toLowerCase().slice(0, 10))
-          );
-          if (alreadyExists) continue;
-          const newId = `cal_${ev.id || Date.now()}_${calAdded}`;
-          const task = { id: newId, title: `📅 ${ev.title}`, time, status: 'pending' };
-          tasks.push(task);
-          calAdded++;
-          console.log(`[SYS] Takvim görevi: ${time} — ${ev.title}`);
-        }
-        if (calAdded) console.log(`[SYS] ${calAdded} takvim etkinliği göreve dönüştürüldü.`);
+        console.log(`[SYS] ${calEvents.length} Google Takvim etkinliği yüklendi.`);
       }
     } catch (e) {
       console.warn('[SYS] Google Takvim yüklenemedi:', e.message);
     }
   }
 
-  // ─── Startup mesajı ───────────────────────────────────────────────────────
-  send(
-`Günaydın Alp. Sistem aktif.
+  const mem        = loadMemory();
+  const isFirstRun = conversationHistory.length === 0 && !mem.onboarding_done && mem.rules.length === 0;
 
-Bugün yapabileceklerin:
-- Bugünün planı
-- Görüşmelerin son özetleri
-- Görev ekle / tamamla / ertele
-- Toplantı özeti at
+  if (isFirstRun) {
+    const onboardingMsg =
+`Merhaba! 👋 Ben ${ASSISTANT_NAME}, sizin kişisel asistanınızım.
 
-Saat 07:30'da sabah brifingini otomatik alacaksın.`
-  );
+Sizi daha iyi tanımak ve en iyi şekilde yardımcı olmak için birkaç şey sormak istiyorum:
 
-  // ─── Sheets bağlantı testi ────────────────────────────────────────────────
-  async function testSheetsConnection() {
-    try {
-      const result = await getPersonContext('test');
-      console.log('[SHEETS] Bağlantı başarılı');
-    } catch (err) {
-      console.error('[SHEETS] Bağlantı hatası:', err.message);
-    }
+1️⃣ Ne iş yapıyorsunuz? (sektör, rol, günlük iş akışı)
+2️⃣ Genellikle kaçta işe başlayıp kaçta bitiriyorsunuz?
+3️⃣ En çok hangi konularda yardıma ihtiyaç duyuyorsunuz? (planlama, mesaj yazma, hatırlatma, araştırma...)
+4️⃣ Haftalık düzenli programınız var mı? (toplantılar, spor, ders gibi)
+5️⃣ Benden ne bekliyorsunuz — nasıl bir asistan olayım?
+
+Bu bilgilerle size çok daha kişisel ve etkili yardım sunabilirim 😊`;
+    send(onboardingMsg);
+    // Mark onboarding as started so we don't repeat on next restart
+    mem.onboarding_done = true;
+    saveMemory(mem);
+  } else {
+    const pendingCount = tasks.filter(t => t.status === 'pending').length;
+    const doneCount    = tasks.filter(t => t.status === 'done').length;
+    const startupMsg = tasks.length
+      ? `Merhaba ${USER_NAME}! 👋 Bugün ${doneCount} görev tamamlandı, ${pendingCount} bekliyor 💪\n\n${planText()}`
+      : `Merhaba ${USER_NAME}! 👋 Ben ${ASSISTANT_NAME}, bugün size yardımcı olmak için buradayım 😊`;
+    send(startupMsg);
   }
-  testSheetsConnection();
 
   // ─── WhatsApp init (optional) ──────────────────────────────────────────────
   const waEnabled = process.env.WA_ENABLED === 'true' || !!process.env.ALLOWED_WA_NUMBERS;
@@ -2897,12 +2171,14 @@ Saat 07:30'da sabah brifingini otomatik alacaksın.`
         // Text message from WhatsApp → run through agent
         onText: async (text, jid) => {
           lastMessageAt   = Date.now();
+          inactivityFired = false;
           await runAgentFromWA(text, jid);
         },
 
         // Image from WhatsApp → extract tasks, ask Telegram confirmation
         onImage: async (buffer, caption, jid) => {
           lastMessageAt   = Date.now();
+          inactivityFired = false;
           send('⏳ WhatsApp görseli analiz ediliyor...');
           const items = await extractTasksFromPhoto(buffer, caption).catch(() => []);
           if (!items.length) {

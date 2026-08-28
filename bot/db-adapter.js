@@ -16,7 +16,11 @@ const HEADERS = {
   'x-bot-user-id': USER_ID,
 };
 
-const TODAY = () => new Date().toISOString().split('T')[0];
+const TZ = process.env.BOT_TIMEZONE || 'Europe/Istanbul';
+
+// toISOString() is UTC — between 00:00 and 03:00 Istanbul time it still returns
+// yesterday's date, which silently wrote tasks onto the wrong day.
+const TODAY = () => new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
 
 /** Upsert a task into the web app DB (fire-and-forget). */
 function syncTask(task, date) {
@@ -44,18 +48,21 @@ function deleteTask(taskId) {
   }).catch(e => console.warn('[DB-Adapter] deleteTask error:', e.message));
 }
 
-/** Returns today's non-done tasks. Returns a Promise. */
-async function getTodayTasks() {
+/** Returns all tasks for a given YYYY-MM-DD date. Returns a Promise. */
+async function getTasksByDate(date) {
   try {
-    const date = TODAY();
-    const res  = await fetch(`${WEB_URL}/api/bot/tasks?date=${date}`, { headers: HEADERS });
+    const d   = date || TODAY();
+    const res = await fetch(`${WEB_URL}/api/bot/tasks?date=${d}`, { headers: HEADERS });
     if (!res.ok) return [];
     return await res.json();
   } catch (e) {
-    console.warn('[DB-Adapter] getTodayTasks error:', e.message);
+    console.warn('[DB-Adapter] getTasksByDate error:', e.message);
     return [];
   }
 }
+
+/** Returns today's tasks. Returns a Promise. */
+const getTodayTasks = () => getTasksByDate(TODAY());
 
 /** Save a daily routine to the web app DB (fire-and-forget). */
 function saveRoutine(text, time) {
@@ -113,7 +120,7 @@ async function getCalendarEvents(date) {
 }
 
 module.exports = {
-  syncTask, updateTaskStatus, deleteTask, getTodayTasks,
+  syncTask, updateTaskStatus, deleteTask, getTodayTasks, getTasksByDate,
   saveRoutine, getRoutines,
   getConversationHistory, saveConversationHistory,
   getCalendarEvents,

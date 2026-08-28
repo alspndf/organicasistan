@@ -45,9 +45,10 @@ let idCounter   = 1;
 const firedKeys = new Set();   // prevent double-firing
 let pendingReschedule          = null;  // task.id waiting for a new time from user
 let pendingDeleteIds           = [];    // task IDs awaiting delete confirmation
-let pendingAnalysisReschedule  = null;  // [{title,time}] incomplete tasks awaiting tomorrow confirm
+let pendingCarryOver           = null;  // [{title,time}] yesterday's leftovers awaiting the 08:00 confirm
 let lastMessageAt = Date.now(); // inactivity tracking
 let inactivityFired = false;    // prevent repeated pings per silence window
+let currentDay = null;          // YYYY-MM-DD (TZ) the in-memory `tasks` array belongs to
 
 // WhatsApp state
 let waModule              = null;  // loaded lazily if WA is enabled
@@ -128,6 +129,12 @@ function loadSchedules() {
 // Returns today's date string YYYY-MM-DD in user timezone
 function todayISO() {
   return new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
+}
+
+// toISOString() is UTC — between 00:00 and 03:00 Istanbul time it still returns
+// the previous day. Always derive dates through these TZ-aware helpers.
+function yesterdayISO() {
+  return new Date(Date.now() - 86_400_000).toLocaleDateString('sv-SE', { timeZone: TZ });
 }
 
 // Increment done count for today
@@ -541,7 +548,9 @@ ${taskList}`;
   if (dayItems.length) {
     ctx += `\n\n## Bugün için Hafıza (${dayName})\n${dayItems.join(', ')}`;
   }
-  if (mem.calendar_today && mem.calendar_today.length) {
+  // Only surface a calendar list that was actually fetched for *today* — a
+  // stale list from a previous day must never be shown to the model as "bugün".
+  if (mem.calendar_today?.length && mem.calendar_date === todayDate) {
     ctx += `\n\n## Bugün Google Takvim'deki Etkinlikler\n` + mem.calendar_today.map(e => `- ${e}`).join('\n');
   }
 
@@ -835,10 +844,107 @@ async function runDailyAnalysis() {
 
   send(`🌙 *Gece Analizi*\n\n${summary}`);
 
+  // Leftovers are NOT carried over here any more — the 08:00 briefing asks
+  // about them the next morning so each day starts on a clean sheet.
   if (pending.length > 0) {
-    pendingAnalysisReschedule = pending.map(t => ({ title: t.title, time: t.time }));
     const list = pending.map(t => `• ${t.time} — ${t.title}`).join('\n');
-    send(`📋 Tamamlanmayan ${pending.length} görev:\n${list}\n\nYarına aynı saatlerde ekleyeyim mi? (Evet / Hayır)`);
+    send(`📋 Tamamlanmayan ${pending.length} görev:\n${list}\n\nYarın sabah 08:00'de bunları bugüne ekleyeyim mi diye soracağım 🌙`);
+  }
+}
+
+// ─── Google Calendar ──────────────────────────────────────────────────────────
+/**
+ * Reloads today's calendar into memory and turns timed events into tasks so the
+ * scheduler can remind them.
+ *
+ * Previously this ran only once at bot startup, so a long-lived process kept
+ * serving the events of whichever day it booted on. It now also runs on day
+ * rollover and every 30 minutes, and always writes (even an empty list) so
+ * stale events from a previous day get cleared instead of lingering forever.
+ */
+async function refreshCalendar() {
+  if (!dbAdapter) return [];
+  try {
+    const fetched = await dbAdapter.getCalendarEvents(todayISO());
+    const events  = Array.isArray(fetched) ? fetched : [];
+
+    const mem = loadMemory();
+    mem.calendar_today = events.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
+    mem.calendar_date  = todayISO();   // lets buildContext reject a stale list
+    saveMemory(mem);
+
+    // Timed events become tasks (restores the behaviour lost in the 2 Jun revert)
+    let added = 0;
+    for (const ev of events) {
+      if (ev.allDay || !ev.start) continue;
+      const time = parseTime(ev.start);
+      if (!time) continue;
+
+      const calId = `cal_${ev.id || ev.title}`;
+      const dupe  = tasks.some(t =>
+        t.id === calId ||
+        (t.time === time && t.title.replace(/^📅 /, '').toLowerCase() === String(ev.title).toLowerCase())
+      );
+      if (dupe) continue;
+
+      tasks.push({ id: calId, title: `📅 ${ev.title}`, time, status: 'pending' });
+      added++;
+      console.log(`[CAL] Görev: ${time} — ${ev.title}`);
+    }
+
+    console.log(`[CAL] ${events.length} etkinlik (${todayISO()}), ${added} yeni görev.`);
+    return events;
+  } catch (e) {
+    console.warn('[CAL] Google Takvim yenilenemedi:', e.message);
+    return [];
+  }
+}
+
+// ─── Day rollover ─────────────────────────────────────────────────────────────
+/**
+ * Rebuilds per-day state when the date changes. Without this the in-memory
+ * `tasks` array kept yesterday's rows forever on a long-running process, which
+ * is why days bled into each other.
+ */
+async function rolloverDay(reason = 'gün dönümü') {
+  const day = todayISO();
+  if (currentDay === day) return;
+  console.log(`[DAY] ${currentDay ?? '—'} → ${day} (${reason})`);
+  currentDay = day;
+
+  firedKeys.clear();
+  pendingReschedule = null;
+  pendingDeleteIds  = [];
+
+  tasks = [];
+  if (dbAdapter) {
+    try {
+      const saved = await dbAdapter.getTasksByDate(day);
+      if (Array.isArray(saved)) {
+        tasks = saved.map(t => ({ id: t.id, title: t.title, time: t.time, status: t.status || 'pending' }));
+      }
+    } catch (e) {
+      console.warn('[DAY] Görevler yüklenemedi:', e.message);
+    }
+  }
+
+  await refreshCalendar();
+}
+
+/**
+ * Yesterday's unfinished tasks, minus anything already on today's list.
+ * Returns [] when there is nothing worth asking about.
+ */
+async function getCarryOverCandidates() {
+  if (!dbAdapter) return [];
+  try {
+    const y = await dbAdapter.getTasksByDate(yesterdayISO());
+    const leftovers = (Array.isArray(y) ? y : []).filter(t => t.status !== 'done');
+    const todayTitles = new Set(tasks.map(t => t.title.toLowerCase().trim()));
+    return leftovers.filter(t => !todayTitles.has(String(t.title).toLowerCase().trim()));
+  } catch (e) {
+    console.warn('[CARRY] Dünkü görevler alınamadı:', e.message);
+    return [];
   }
 }
 
@@ -1486,6 +1592,13 @@ async function runAgent(userText) {
 setInterval(() => {
   const now = nowHH();
 
+  // Safety net: if the midnight cron was missed (restart, sleep, clock skew),
+  // roll the day over here instead of firing yesterday's reminders all day.
+  if (currentDay && currentDay !== todayISO()) {
+    rolloverDay('scheduler').catch(e => console.error('[DAY] Hata:', e.message));
+    return;
+  }
+
   for (const task of tasks.filter(t => t.status === 'pending')) {
     // Pre-reminder
     const preKey = `pre:${task.id}:${task.time}`;
@@ -1716,29 +1829,29 @@ bot.on('message', async msg => {
   lastMessageAt   = Date.now();
   inactivityFired = false;
 
-  // ── Analysis reschedule intercept ─────────────────────────────────────────
-  if (pendingAnalysisReschedule) {
+  // ── Morning carry-over intercept (asked by the 08:00 briefing) ────────────
+  if (pendingCarryOver) {
     const lower = text.toLowerCase().trim();
-    if (/^(evet|yes|ok|tamam|ekle|ekleyin|ekleyiver)$/.test(lower)) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    if (/^(evet|evt|e|yes|ok|tamam|ekle|ekleyin|ekleyiver|olur)$/.test(lower)) {
+      const date  = todayISO();
       const added = [];
-      for (const t of pendingAnalysisReschedule) {
+      for (const t of pendingCarryOver) {
         const newId = `t${idCounter++}`;
-        dbAdapter?.syncTask({ id: newId, title: t.title, time: t.time, status: 'pending' }, tomorrowStr);
+        // Push into the in-memory list too, otherwise no reminder ever fires
+        tasks.push({ id: newId, title: t.title, time: t.time, status: 'pending' });
+        dbAdapter?.syncTask({ id: newId, title: t.title, time: t.time, status: 'pending' }, date);
         added.push(t);
       }
-      pendingAnalysisReschedule = null;
-      send(`✅ ${added.length} görev yarına eklendi:\n${added.map(t => `• ${t.time} — ${t.title}`).join('\n')}`);
+      pendingCarryOver = null;
+      send(`✅ ${added.length} görev bugüne eklendi:\n${added.map(t => `• ${t.time} — ${t.title}`).join('\n')}`);
       return;
-    } else if (/^(hayır|hayir|no|vazgeç|vazgec|istemiyorum)$/.test(lower)) {
-      pendingAnalysisReschedule = null;
-      send(`Tamam ${USER_NAME}, eklemedim. İyi geceler! 🌙`);
+    } else if (/^(hayır|hayir|h|no|yok|vazgeç|vazgec|istemiyorum|gerek yok)$/.test(lower)) {
+      pendingCarryOver = null;
+      send(`Tamam ${USER_NAME}, eklemedim. Bugün tertemiz başlıyor ☀️`);
       return;
     }
     // Unrelated message — clear state and process normally
-    pendingAnalysisReschedule = null;
+    pendingCarryOver = null;
   }
 
   // ── Delete confirmation intercept ──────────────────────────────────────────
@@ -1797,10 +1910,24 @@ rl.on('line', async (line) => {
   }
 });
 
+// ─── Cron: 00:01 — day rollover (clean slate) ────────────────────────────────
+cron.schedule('1 0 * * *', () => {
+  rolloverDay('gece yarısı').catch(e => console.error('[DAY] Hata:', e.message));
+}, { timezone: TZ });
+
+// ─── Google Takvim: her 30 dakikada bir tazele ───────────────────────────────
+setInterval(() => {
+  refreshCalendar().catch(() => {});
+}, 30 * 60 * 1000);
+
 // ─── Cron: 08:00 — smart morning briefing ────────────────────────────────────
 cron.schedule('0 8 * * *', async () => {
   console.log('[CRON] 08:00 akıllı brifing başlatılıyor...');
   try {
+    // Start the day on a clean sheet, then pull in today's calendar
+    await rolloverDay('08:00 brifing');
+    const calendar  = await refreshCalendar();
+
     const dayName   = DAY_LABELS[todayDayIndex()] || '';
     const mem       = loadMemory();
     const dayItems  = mem.weekly_schedule[todayKey()] || [];
@@ -1868,6 +1995,10 @@ cron.schedule('0 8 * * *', async () => {
     }
 
     const lines = [`🌅 *Günaydın, ${USER_NAME}!*\n`, briefing];
+    if (calendar.length) {
+      lines.push(`\n📆 *Google Takvim:*`);
+      calendar.forEach(e => lines.push(`  • ${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`));
+    }
     if (pending.length) {
       lines.push(`\n📋 *Bugünkü görevler:*`);
       pending.forEach(t => lines.push(`⏳ ${t.time} — ${t.title}`));
@@ -1875,6 +2006,21 @@ cron.schedule('0 8 * * *', async () => {
 
     notifyAll(lines.join('\n'));
     console.log('[CRON] 08:00 brifing gönderildi.');
+
+    // ── Ask about yesterday's leftovers (opt-in, never auto-added) ──────────
+    const leftovers = await getCarryOverCandidates();
+    if (leftovers.length) {
+      pendingCarryOver = leftovers.map(t => ({ title: t.title, time: t.time }));
+      const list = pendingCarryOver.map(t => `• ${t.time} — ${t.title}`).join('\n');
+      send(
+        `📋 Dünden kalan ${pendingCarryOver.length} görev var:\n${list}\n\n` +
+        `Bugüne ekleyeyim mi? (Evet / Hayır)\n` +
+        `_Hayır dersen bugün tertemiz başlar._`
+      );
+      console.log(`[CARRY] ${pendingCarryOver.length} görev için onay soruldu.`);
+    } else {
+      console.log('[CARRY] Dünden kalan görev yok.');
+    }
 
     // ── Student follow-up analysis (runs after main briefing) ──────────────
     if (studentsModule) {
@@ -2086,19 +2232,12 @@ console.log('[SYS] Sistem başlatılıyor...');
       console.warn('[SYS] Rutinler yüklenemedi:', e.message);
     }
 
-    // Load today's Google Calendar events into memory for context
-    try {
-      const calEvents = await dbAdapter.getCalendarEvents();
-      if (Array.isArray(calEvents) && calEvents.length) {
-        const mem = loadMemory();
-        mem.calendar_today = calEvents.map(e => `${e.allDay ? 'Tüm gün' : e.start} — ${e.title}`);
-        saveMemory(mem);
-        console.log(`[SYS] ${calEvents.length} Google Takvim etkinliği yüklendi.`);
-      }
-    } catch (e) {
-      console.warn('[SYS] Google Takvim yüklenemedi:', e.message);
-    }
+    // Load today's calendar into memory + tasks. Kept fresh afterwards by the
+    // 30-minute interval, the day rollover and the 08:00 briefing.
+    await refreshCalendar();
   }
+
+  currentDay = todayISO();
 
   const mem        = loadMemory();
   const isFirstRun = conversationHistory.length === 0 && !mem.onboarding_done && mem.rules.length === 0;
